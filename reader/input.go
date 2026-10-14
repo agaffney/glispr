@@ -22,12 +22,12 @@ func NewInput(r io.Reader) (*Input, error) {
 	}, nil
 }
 
-func (i *Input) ReadRune() (rune, error) {
+func (i *Input) ReadRune() (rune, int, error) {
 	// Reset line number if zero
 	i.line = max(i.line, 1)
-	c, _, err := i.r.ReadRune()
+	c, size, err := i.r.ReadRune()
 	if err != nil {
-		return 0, err
+		return 0, size, err
 	}
 	// Increment line position
 	i.linePos++
@@ -37,7 +37,7 @@ func (i *Input) ReadRune() (rune, error) {
 		i.prevLinePos = i.linePos
 		i.linePos = 0
 	}
-	return c, nil
+	return c, size, nil
 }
 
 func (i *Input) UnreadRune() error {
