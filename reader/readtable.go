@@ -43,7 +43,7 @@ var StandardReadtable = Readtable{
 		case rune(8), rune(127):
 			return ReadtableSyntaxTypeConstituent
 		// whitespace
-		case '\t', '\n', '\r', ' ':
+		case '\t', '\n', '\r', '\f', ' ':
 			return ReadtableSyntaxTypeWhitespace
 		// special characters
 		case '!', '$', '%', '&', '*', '+', '-', '.', '/', ':', '<', '=', '>', '?', '@', '[', ']', '^', '_', '{', '}', '~':

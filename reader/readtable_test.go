@@ -12,6 +12,7 @@ func TestStandardReadtable(t *testing.T) {
 	assert.Equal(t, rt.CaseMode, reader.ReadtableCaseModeUpcase, "case mode should be Upcase")
 	expectedSyntaxTypes := map[rune]reader.ReadtableSyntaxType{
 		' ':  reader.ReadtableSyntaxTypeWhitespace,
+		'\f': reader.ReadtableSyntaxTypeWhitespace,
 		'3':  reader.ReadtableSyntaxTypeConstituent,
 		'd':  reader.ReadtableSyntaxTypeConstituent,
 		'D':  reader.ReadtableSyntaxTypeConstituent,
