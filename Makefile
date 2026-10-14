@@ -14,10 +14,13 @@ all: $(BINARIES)
 clean:
 	rm -f $(BINARIES)
 
-$(BINARIES): $(GOFILES)
+$(BINARIES): $(GOFILES) mod-tidy
 	go build -o $(ROOT_DIR)/$(@) $(ROOT_DIR)/cmd/$(@)
 
-.PHONY: test
+.PHONY: test mod-tidy
 
-test:
+test: mod-tidy
 	go test -v ./...
+
+mod-tidy:
+	go mod tidy
