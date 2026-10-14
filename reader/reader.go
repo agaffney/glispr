@@ -21,15 +21,15 @@ func NewReader() *Reader {
 func (r *Reader) Read(i *Input) (Expression, error) {
 	tokenBuf := bytes.NewBuffer(nil)
 	multipleEscape := false
-	seenSingleEscape := false
+	seenEscape := false
 	for {
-		ch, err := i.ReadRune()
+		ch, _, err := i.ReadRune()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if tokenBuf.Len() == 0 {
 					return nil, nil
 				}
-				if !seenSingleEscape {
+				if !seenEscape {
 					if tmpNum := NewNumberFromString(tokenBuf.String()); tmpNum != nil {
 						return tmpNum, nil
 					}
@@ -57,7 +57,7 @@ func (r *Reader) Read(i *Input) (Expression, error) {
 				if err := i.UnreadRune(); err != nil {
 					return nil, err
 				}
-				if !seenSingleEscape {
+				if !seenEscape {
 					if tmpNum := NewNumberFromString(tokenBuf.String()); tmpNum != nil {
 						return tmpNum, nil
 					}
@@ -72,7 +72,7 @@ func (r *Reader) Read(i *Input) (Expression, error) {
 				if err := i.UnreadRune(); err != nil {
 					return nil, err
 				}
-				if !seenSingleEscape {
+				if !seenEscape {
 					if tmpNum := NewNumberFromString(tokenBuf.String()); tmpNum != nil {
 						return tmpNum, nil
 					}
@@ -97,23 +97,25 @@ func (r *Reader) Read(i *Input) (Expression, error) {
 			return expr, nil
 		case ReadtableSyntaxTypeSingleEscape:
 			// Read next character and write to token buffer
-			ch, err = i.ReadRune()
+			ch, _, err = i.ReadRune()
 			if err != nil {
 				return nil, err
 			}
 			_, _ = tokenBuf.WriteRune(ch)
-			seenSingleEscape = true
+			seenEscape = true
 		case ReadtableSyntaxTypeMultipleEscape:
 			multipleEscape = !multipleEscape
+			seenEscape = true
 			continue
 		case ReadtableSyntaxTypeConstituent:
 			if !multipleEscape {
-				if r.rt.CaseMode == ReadtableCaseModeUpcase {
+				switch r.rt.CaseMode {
+				case ReadtableCaseModeUpcase:
 					ch = unicode.ToUpper(ch)
-				} else if r.rt.CaseMode == ReadtableCaseModeDowncase {
+				case ReadtableCaseModeDowncase:
 					ch = unicode.ToLower(ch)
-				} else if r.rt.CaseMode == ReadtableCaseModeInvert {
-					// TODO: keep track of whether non-escaped chars are upper or lower case and invert if all the same
+				case ReadtableCaseModeInvert:
+					// TODO: invert case only when all unescaped letters share case
 				}
 			}
 			_, _ = tokenBuf.WriteRune(ch)
@@ -130,7 +132,7 @@ func readString(r *Reader, i *Input, initialChar rune) (Expression, error) {
 	var err error
 	var st ReadtableSyntaxType
 	for {
-		ch, err = i.ReadRune()
+		ch, _, err = i.ReadRune()
 		if err != nil {
 			return nil, err
 		}
@@ -167,7 +169,7 @@ func readList(r *Reader, i *Input, initialChar rune) (Expression, error) {
 	var ch rune
 	var err error
 	for {
-		ch, err = i.ReadRune()
+		ch, _, err = i.ReadRune()
 		if err != nil {
 			return nil, err
 		}
@@ -194,7 +196,7 @@ func readComment(r *Reader, i *Input, initialChar rune) (Expression, error) {
 	var ch rune
 	var err error
 	for {
-		ch, err = i.ReadRune()
+		ch, _, err = i.ReadRune()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
