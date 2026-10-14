@@ -20,6 +20,7 @@ func NewReader() *Reader {
 
 func (r *Reader) Read(i *Input) (Expression, error) {
 	tokenBuf := bytes.NewBuffer(nil)
+	tokenEscaped := make([]bool, 0)
 	multipleEscape := false
 	seenEscape := false
 	for {
@@ -29,13 +30,14 @@ func (r *Reader) Read(i *Input) (Expression, error) {
 				if tokenBuf.Len() == 0 {
 					return nil, nil
 				}
+				rawToken := tokenBuf.String()
 				if !seenEscape {
-					if tmpNum := NewNumberFromString(tokenBuf.String()); tmpNum != nil {
+					if tmpNum := NewNumberFromString(rawToken); tmpNum != nil {
 						return tmpNum, nil
 					}
 				}
 				return &Symbol{
-					name: tokenBuf.String(),
+					name: r.caseConvert(rawToken, tokenEscaped),
 				}, nil
 			}
 			return nil, err
@@ -57,13 +59,14 @@ func (r *Reader) Read(i *Input) (Expression, error) {
 				if err := i.UnreadRune(); err != nil {
 					return nil, err
 				}
+				rawToken := tokenBuf.String()
 				if !seenEscape {
-					if tmpNum := NewNumberFromString(tokenBuf.String()); tmpNum != nil {
+					if tmpNum := NewNumberFromString(rawToken); tmpNum != nil {
 						return tmpNum, nil
 					}
 				}
 				return &Symbol{
-					name: tokenBuf.String(),
+					name: r.caseConvert(rawToken, tokenEscaped),
 				}, nil
 			}
 			continue
@@ -72,19 +75,21 @@ func (r *Reader) Read(i *Input) (Expression, error) {
 				if err := i.UnreadRune(); err != nil {
 					return nil, err
 				}
+				rawToken := tokenBuf.String()
 				if !seenEscape {
-					if tmpNum := NewNumberFromString(tokenBuf.String()); tmpNum != nil {
+					if tmpNum := NewNumberFromString(rawToken); tmpNum != nil {
 						return tmpNum, nil
 					}
 				}
 				return &Symbol{
-					name: tokenBuf.String(),
+					name: r.caseConvert(rawToken, tokenEscaped),
 				}, nil
 			}
 			fn, ok := r.rt.MacroFuncs[ch]
 			if !ok {
 				// Write to token buffer if no macro function defined
 				_, _ = tokenBuf.WriteRune(ch)
+				tokenEscaped = append(tokenEscaped, false)
 				continue
 			}
 			expr, err := fn(r, i, ch)
@@ -102,23 +107,15 @@ func (r *Reader) Read(i *Input) (Expression, error) {
 				return nil, err
 			}
 			_, _ = tokenBuf.WriteRune(ch)
+			tokenEscaped = append(tokenEscaped, true)
 			seenEscape = true
 		case ReadtableSyntaxTypeMultipleEscape:
 			multipleEscape = !multipleEscape
 			seenEscape = true
 			continue
 		case ReadtableSyntaxTypeConstituent:
-			if !multipleEscape {
-				switch r.rt.CaseMode {
-				case ReadtableCaseModeUpcase:
-					ch = unicode.ToUpper(ch)
-				case ReadtableCaseModeDowncase:
-					ch = unicode.ToLower(ch)
-				case ReadtableCaseModeInvert:
-					// TODO: invert case only when all unescaped letters share case
-				}
-			}
 			_, _ = tokenBuf.WriteRune(ch)
+			tokenEscaped = append(tokenEscaped, multipleEscape)
 		default:
 			return nil, fmt.Errorf("unknown syntax type %d, this is probably a bug", st)
 		}
@@ -210,3 +207,60 @@ func readComment(r *Reader, i *Input, initialChar rune) (Expression, error) {
 	}
 	return nil, nil
 }
+
+func (r *Reader) caseConvert(raw string, escaped []bool) string {
+	runes := []rune(raw)
+	out := append([]rune(nil), runes...)
+	switch r.rt.CaseMode {
+	case ReadtableCaseModeUpcase:
+		for i := range out {
+			if i < len(escaped) && !escaped[i] {
+				out[i] = unicode.ToUpper(out[i])
+			}
+		}
+	case ReadtableCaseModeDowncase:
+		for i := range out {
+			if i < len(escaped) && !escaped[i] {
+				out[i] = unicode.ToLower(out[i])
+			}
+		}
+	case ReadtableCaseModeInvert:
+		// Only invert when all unescaped letters in the token share the same case.
+		allUpper := true
+		allLower := true
+		hasLetter := false
+		for i := range out {
+			if i >= len(escaped) || escaped[i] {
+				continue
+			}
+			if !unicode.IsLetter(out[i]) {
+				continue
+			}
+			hasLetter = true
+			if unicode.IsLower(out[i]) {
+				allUpper = false
+			}
+			if unicode.IsUpper(out[i]) {
+				allLower = false
+			}
+		}
+		if !hasLetter {
+			return string(out)
+		}
+		if allUpper && !allLower {
+			for i := range out {
+				if i < len(escaped) && !escaped[i] && unicode.IsLetter(out[i]) && unicode.IsUpper(out[i]) {
+					out[i] = unicode.ToLower(out[i])
+				}
+			}
+		} else if allLower && !allUpper {
+			for i := range out {
+				if i < len(escaped) && !escaped[i] && unicode.IsLetter(out[i]) && unicode.IsLower(out[i]) {
+					out[i] = unicode.ToUpper(out[i])
+				}
+			}
+		}
+	}
+	return string(out)
+}
+
