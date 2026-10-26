@@ -160,6 +160,10 @@ func readLiteral(r *Reader, i *Input, initialChar rune) (Expression, error) {
 	}, nil
 }
 
+func readCloseParen(r *Reader, i *Input, initialChar rune) (Expression, error) {
+	return nil, fmt.Errorf("unmatched close parenthesis")
+}
+
 func readList(r *Reader, i *Input, initialChar rune) (Expression, error) {
 	items := []Expression{}
 	var item Expression
@@ -169,6 +173,9 @@ func readList(r *Reader, i *Input, initialChar rune) (Expression, error) {
 		ch, _, err = i.ReadRune()
 		if err != nil {
 			return nil, err
+		}
+		if r.rt.SyntaxTypeFunc(ch) == ReadtableSyntaxTypeWhitespace {
+			continue
 		}
 		if ch == ')' {
 			break
@@ -263,4 +270,3 @@ func (r *Reader) caseConvert(raw string, escaped []bool) string {
 	}
 	return string(out)
 }
-

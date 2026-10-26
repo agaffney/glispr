@@ -491,3 +491,59 @@ func TestReaderExpression(t *testing.T) {
 		assert.Equal(t, testDef.expectedExpr, tmp, "expression does not match expected value for input: %s", testDef.input)
 	}
 }
+
+func TestReaderCloseParen(t *testing.T) {
+	r := reader.NewReader()
+
+	t.Run("unmatched close parenthesis errors", func(t *testing.T) {
+		i, err := reader.NewInput(strings.NewReader(")"))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		assert.Error(t, err, "expected unmatched close parenthesis to error")
+		assert.Nil(t, tmp)
+	})
+
+	t.Run("empty list consumes close parenthesis", func(t *testing.T) {
+		i, err := reader.NewInput(strings.NewReader("()"))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		assert.NoError(t, err)
+		assert.IsType(t, &reader.List{}, tmp)
+		list := tmp.(*reader.List)
+		assert.Empty(t, list.Items())
+	})
+
+	t.Run("list with whitespace before close parenthesis", func(t *testing.T) {
+		tests := []struct {
+			input    string
+			itemName string
+		}{
+			{input: "( )", itemName: ""},
+			{input: "(foo )", itemName: "FOO"},
+			{input: "( foo )", itemName: "FOO"},
+		}
+		for _, tc := range tests {
+			tc := tc
+			t.Run(tc.input, func(t *testing.T) {
+				i, err := reader.NewInput(strings.NewReader(tc.input))
+				assert.NoError(t, err)
+
+				tmp, err := r.Read(i)
+				assert.NoError(t, err)
+				assert.IsType(t, &reader.List{}, tmp)
+				list := tmp.(*reader.List)
+
+				if tc.itemName == "" {
+					assert.Empty(t, list.Items())
+				} else {
+					assert.Len(t, list.Items(), 1)
+					sym, ok := list.Items()[0].(*reader.Symbol)
+					assert.True(t, ok)
+					assert.Equal(t, tc.itemName, sym.Name())
+				}
+			})
+		}
+	})
+}
