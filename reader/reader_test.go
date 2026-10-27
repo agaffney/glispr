@@ -1,6 +1,7 @@
 package reader_test
 
 import (
+	"errors"
 	"math/big"
 	"strings"
 	"testing"
@@ -307,46 +308,6 @@ func TestReaderNumber(t *testing.T) {
 			expectedNum: reader.NewNumberInteger(new(big.Int).MulRange(1, 25)),
 		},
 		{
-			input:       `#2r11010101`,
-			expectedNum: reader.NewNumberInteger(big.NewInt(213)),
-		},
-		{
-			input:       `#b11010101`,
-			expectedNum: reader.NewNumberInteger(big.NewInt(213)),
-		},
-		{
-			input:       `#b+11010101`,
-			expectedNum: reader.NewNumberInteger(big.NewInt(213)),
-		},
-		{
-			input:       `#o325`,
-			expectedNum: reader.NewNumberInteger(big.NewInt(213)),
-		},
-		{
-			input:       `#xD5`,
-			expectedNum: reader.NewNumberInteger(big.NewInt(213)),
-		},
-		{
-			input:       `#16r+D5`,
-			expectedNum: reader.NewNumberInteger(big.NewInt(213)),
-		},
-		{
-			input:       `#o-300`,
-			expectedNum: reader.NewNumberInteger(big.NewInt(-192)),
-		},
-		{
-			input:       `#3r-21010`,
-			expectedNum: reader.NewNumberInteger(big.NewInt(-192)),
-		},
-		{
-			input:       `#25R-7H`,
-			expectedNum: reader.NewNumberInteger(big.NewInt(-192)),
-		},
-		{
-			input:       `#xACCEDED`,
-			expectedNum: reader.NewNumberInteger(big.NewInt(181202413)),
-		},
-		{
 			input:       `2/3`,
 			expectedNum: reader.NewNumberRatio(big.NewRat(2, 3)),
 		},
@@ -365,22 +326,6 @@ func TestReaderNumber(t *testing.T) {
 		{
 			input:       `10/5`,
 			expectedNum: reader.NewNumberRatio(big.NewRat(10, 5)),
-		},
-		{
-			input:       `#o-101/75`,
-			expectedNum: reader.NewNumberRatio(big.NewRat(-65, 61)),
-		},
-		{
-			input:       `#3r120/21`,
-			expectedNum: reader.NewNumberRatio(big.NewRat(15, 7)),
-		},
-		{
-			input:       `#Xbc/ad`,
-			expectedNum: reader.NewNumberRatio(big.NewRat(188, 173)),
-		},
-		{
-			input:       `#xFADED/FACADE`,
-			expectedNum: reader.NewNumberRatio(big.NewRat(1027565, 16435934)),
 		},
 		{
 			input:       `0.0`,
@@ -546,4 +491,168 @@ func TestReaderCloseParen(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestReaderDispatchRadix(t *testing.T) {
+	r := reader.NewReader()
+
+	testDefs := []struct {
+		input       string
+		expectedNum *reader.Number
+	}{
+		{input: `#b11010101`, expectedNum: reader.NewNumberInteger(big.NewInt(213))},
+		{input: `#o325`, expectedNum: reader.NewNumberInteger(big.NewInt(213))},
+		{input: `#xD5`, expectedNum: reader.NewNumberInteger(big.NewInt(213))},
+		{input: `#2r11010101`, expectedNum: reader.NewNumberInteger(big.NewInt(213))},
+		{input: `#8r325`, expectedNum: reader.NewNumberInteger(big.NewInt(213))},
+		{input: `#16rD5`, expectedNum: reader.NewNumberInteger(big.NewInt(213))},
+		{input: `#16r+D5`, expectedNum: reader.NewNumberInteger(big.NewInt(213))},
+		{input: `#b+11010101`, expectedNum: reader.NewNumberInteger(big.NewInt(213))},
+		{input: `#o-300`, expectedNum: reader.NewNumberInteger(big.NewInt(-192))},
+		{input: `#3r-21010`, expectedNum: reader.NewNumberInteger(big.NewInt(-192))},
+		{input: `#25R-7H`, expectedNum: reader.NewNumberInteger(big.NewInt(-192))},
+		{input: `#xACCEDED`, expectedNum: reader.NewNumberInteger(big.NewInt(181202413))},
+		{input: `#o-101/75`, expectedNum: reader.NewNumberRatio(big.NewRat(-65, 61))},
+		{input: `#3r120/21`, expectedNum: reader.NewNumberRatio(big.NewRat(15, 7))},
+		{input: `#Xbc/ad`, expectedNum: reader.NewNumberRatio(big.NewRat(188, 173))},
+		{input: `#xFADED/FACADE`, expectedNum: reader.NewNumberRatio(big.NewRat(1027565, 16435934))},
+		{input: `#xFF.`, expectedNum: reader.NewNumberInteger(big.NewInt(255))},
+	}
+	for _, testDef := range testDefs {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		if err != nil {
+			t.Errorf("unexpected error: %s", err)
+			continue
+		}
+		tmp, err := r.Read(i)
+		if err != nil {
+			t.Errorf("unexpected error: %s", err)
+			continue
+		}
+		assert.IsType(t, &reader.Number{}, tmp, "did not get expected expression type for input: %s", testDef.input)
+		tmpNum := tmp.(*reader.Number)
+		if !tmpNum.Equal(testDef.expectedNum) {
+			t.Errorf("number does not match expected value for input: %s\n\n  Expected: %s\n  Actual: %s", testDef.input, testDef.expectedNum.String(), tmpNum.String())
+		}
+	}
+
+	t.Run("unknown dispatch macro errors", func(t *testing.T) {
+		inputs := []string{"#p", "#q", "#?", "#!", "#&", "#*", "#+", "#-"}
+		for _, input := range inputs {
+			i, err := reader.NewInput(strings.NewReader(input))
+			assert.NoError(t, err)
+
+			tmp, err := r.Read(i)
+			assert.Error(t, err, "expected %q to error", input)
+			assert.Nil(t, tmp)
+		}
+	})
+
+	t.Run("hash at EOF returns hash symbol", func(t *testing.T) {
+		i, err := reader.NewInput(strings.NewReader("#"))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		assert.NoError(t, err)
+		assert.IsType(t, &reader.Symbol{}, tmp)
+		assert.Equal(t, "#", tmp.(*reader.Symbol).Name())
+	})
+
+	t.Run("digit radix without r errors", func(t *testing.T) {
+		inputs := []string{"#123", "#123x"}
+		for _, input := range inputs {
+			i, err := reader.NewInput(strings.NewReader(input))
+			assert.NoError(t, err)
+
+			tmp, err := r.Read(i)
+			assert.Error(t, err, "expected %q to error", input)
+			assert.Nil(t, tmp)
+		}
+	})
+
+	t.Run("malformed radix numbers error", func(t *testing.T) {
+		inputs := []string{"#xz", "#2rabc", "#x", "#2r", "#2r ", "#xF.F", "#1r0", "#37r0", "#999999999999999999999999r0"}
+		for _, input := range inputs {
+			i, err := reader.NewInput(strings.NewReader(input))
+			assert.NoError(t, err)
+
+			tmp, err := r.Read(i)
+			assert.Error(t, err, "expected %q to error", input)
+			assert.Nil(t, tmp)
+		}
+	})
+}
+
+func TestReaderError(t *testing.T) {
+	testDefs := []struct {
+		input      string
+		wantLine   int
+		wantOffset int
+	}{
+		{input: ")", wantLine: 1, wantOffset: 1},
+		{input: "#p", wantLine: 1, wantOffset: 2},
+		{input: "\n#p", wantLine: 2, wantOffset: 2},
+		{input: "#1r0", wantLine: 1, wantOffset: 3},
+		{input: "#37r0", wantLine: 1, wantOffset: 4},
+		{input: "#99999999999999999999r0", wantLine: 1, wantOffset: 22},
+	}
+	for _, testDef := range testDefs {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+
+		tmp, err := reader.NewReader().Read(i)
+		assert.Nil(t, tmp)
+		if !assert.Error(t, err, "expected %q to error", testDef.input) {
+			continue
+		}
+		var readerErr reader.ReaderError
+		if !assert.True(t, errors.As(err, &readerErr), "expected ReaderError for %q", testDef.input) {
+			continue
+		}
+		assert.Equal(t, testDef.wantLine, readerErr.Line, "wrong line for %q", testDef.input)
+		assert.Equal(t, testDef.wantOffset, readerErr.Offset, "wrong offset for %q", testDef.input)
+	}
+}
+
+func TestNewNumberFromString(t *testing.T) {
+	testDefs := []struct {
+		val         string
+		radix       int
+		expectedNum *reader.Number
+	}{
+		{val: "123", radix: 10, expectedNum: reader.NewNumberInteger(big.NewInt(123))},
+		{val: "0", radix: 10, expectedNum: reader.NewNumberInteger(big.NewInt(0))},
+		{val: "-0", radix: 10, expectedNum: reader.NewNumberInteger(big.NewInt(0))},
+		{val: "+6", radix: 10, expectedNum: reader.NewNumberInteger(big.NewInt(6))},
+		{val: "+28", radix: 10, expectedNum: reader.NewNumberInteger(big.NewInt(28))},
+		{val: "-1", radix: 10, expectedNum: reader.NewNumberInteger(big.NewInt(-1))},
+		{val: "15511210043330985984000000", radix: 10, expectedNum: reader.NewNumberInteger(new(big.Int).MulRange(1, 25))},
+		{val: "11010101", radix: 2, expectedNum: reader.NewNumberInteger(big.NewInt(213))},
+		{val: "325", radix: 8, expectedNum: reader.NewNumberInteger(big.NewInt(213))},
+		{val: "D5", radix: 16, expectedNum: reader.NewNumberInteger(big.NewInt(213))},
+		{val: "FF.", radix: 16, expectedNum: reader.NewNumberInteger(big.NewInt(255))},
+		{val: "-7H", radix: 25, expectedNum: reader.NewNumberInteger(big.NewInt(-192))},
+		{val: "ACCEDED", radix: 16, expectedNum: reader.NewNumberInteger(big.NewInt(181202413))},
+		{val: "2/3", radix: 10, expectedNum: reader.NewNumberRatio(big.NewRat(2, 3))},
+		{val: "4/6", radix: 10, expectedNum: reader.NewNumberRatio(big.NewRat(4, 6))},
+		{val: "-17/23", radix: 10, expectedNum: reader.NewNumberRatio(big.NewRat(-17, 23))},
+		{val: "10/5", radix: 10, expectedNum: reader.NewNumberRatio(big.NewRat(10, 5))},
+		{val: "-101/75", radix: 8, expectedNum: reader.NewNumberRatio(big.NewRat(-65, 61))},
+		{val: "120/21", radix: 3, expectedNum: reader.NewNumberRatio(big.NewRat(15, 7))},
+		{val: "bc/ad", radix: 16, expectedNum: reader.NewNumberRatio(big.NewRat(188, 173))},
+		{val: "FADED/FACADE", radix: 16, expectedNum: reader.NewNumberRatio(big.NewRat(1027565, 16435934))},
+		{val: "0.0", radix: 10, expectedNum: reader.NewNumberFloat(big.NewFloat(0.0))},
+		{val: "0E0", radix: 10, expectedNum: reader.NewNumberFloat(big.NewFloat(0.0))},
+		{val: "3.1415926535897932384", radix: 10, expectedNum: reader.NewNumberFloat(big.NewFloat(3.1415926535897932384e0))},
+	}
+	for _, testDef := range testDefs {
+		tmp := reader.NewNumberFromString(testDef.val, testDef.radix)
+		if tmp == nil {
+			t.Errorf("NewNumberFromString(%q, %d) returned nil", testDef.val, testDef.radix)
+			continue
+		}
+		if !tmp.Equal(testDef.expectedNum) {
+			t.Errorf("NewNumberFromString(%q, %d) does not match expected value\n\n  Expected: %s\n  Actual: %s", testDef.val, testDef.radix, testDef.expectedNum.String(), tmp.String())
+		}
+	}
 }

@@ -77,6 +77,7 @@ var StandardReadtable = Readtable{
 		'\'': readLiteral,
 		'(':  readList,
 		';':  readComment,
+		'#':  readDispatch,
 		')':  readCloseParen,
 		// TODO: add more entries for macro characters
 	},
