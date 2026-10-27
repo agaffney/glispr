@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/big"
 	"slices"
-	"strconv"
 	"strings"
 )
 
@@ -137,82 +136,43 @@ func NewNumberRatio(ratVal *big.Rat) *Number {
 	}
 }
 
-func NewNumberFromString(val string) *Number {
-	var err error
-	radix := 10
-	foundNum := false
+func NewNumberFromString(val string, radix int) *Number {
 	foundRatio := false
 	foundFloat := false
-	foundRadix := false
 	buf := bytes.NewBuffer(nil)
 	for i, ch := range val {
-		if i == 0 {
-			if ch == '#' {
-				foundRadix = true
-				continue
-			}
-			foundNum = true
-		}
-		if foundNum {
-			switch {
-			case ch >= '0' && ch <= '9':
-				_, _ = buf.WriteRune(ch)
-			case radix > 10 && (ch >= 'a' && ch < 'a'+rune(radix-10)) || (ch >= 'A' && ch < 'A'+rune(radix-10)):
-				// Write any alphabetic character that would be valid
-				// for the current radix to the buffer
-				_, _ = buf.WriteRune(ch)
-			case ch == '-' || ch == '+':
-				if foundRatio {
-					// No sign allowed on denominator
-					return nil
-				}
-				_, _ = buf.WriteRune(ch)
-			case ch == '.':
-				_, _ = buf.WriteRune(ch)
-				foundFloat = true
-			case radix == 10 && (ch == 'e' || ch == 'E' || ch == 's' || ch == 'S' || ch == 'f' || ch == 'F' || ch == 'd' || ch == 'D' || ch == 'l' || ch == 'L'):
-				// Replace various exponent/size markers with 'e'
-				// TODO: record/use size markers
-				_, _ = buf.WriteRune('e')
-				foundFloat = true
-			case ch == '/':
-				_, _ = buf.WriteRune(ch)
-				foundRatio = true
-			default:
-				// Non-number character
+		switch {
+		case ch >= '0' && ch <= min('0'+rune(radix-1), '9'):
+			_, _ = buf.WriteRune(ch)
+		case radix > 10 && (ch >= 'a' && ch < 'a'+rune(radix-10)) || (ch >= 'A' && ch < 'A'+rune(radix-10)):
+			// Write any alphabetic character that would be valid
+			// for the current radix to the buffer
+			_, _ = buf.WriteRune(ch)
+		case ch == '-' || ch == '+':
+			if foundRatio {
+				// No sign allowed on denominator
 				return nil
 			}
-		} else if foundRadix {
-			if i == 1 && (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') {
-				switch ch {
-				case 'b', 'B':
-					radix = 2
-					foundNum = true
-					continue
-				case 'o', 'O':
-					radix = 8
-					foundNum = true
-					continue
-				case 'x', 'X':
-					radix = 16
-					foundNum = true
-					continue
-				}
-			}
-			switch {
-			case ch >= '0' && ch <= '9':
-				_, _ = buf.WriteRune(ch)
-			case ch == 'r' || ch == 'R':
-				radix, err = strconv.Atoi(buf.String())
-				if err != nil {
-					return nil
-				}
-				buf.Reset()
-				foundNum = true
-			default:
-				// This isn't a valid number, so return
+			_, _ = buf.WriteRune(ch)
+		case ch == '.':
+			if radix != 10 && i != len(val)-1 {
 				return nil
 			}
+			_, _ = buf.WriteRune(ch)
+			if i != len(val)-1 {
+				foundFloat = true
+			}
+		case radix == 10 && (ch == 'e' || ch == 'E' || ch == 's' || ch == 'S' || ch == 'f' || ch == 'F' || ch == 'd' || ch == 'D' || ch == 'l' || ch == 'L'):
+			// Replace various exponent/size markers with 'e'
+			// TODO: record/use size markers
+			_, _ = buf.WriteRune('e')
+			foundFloat = true
+		case ch == '/':
+			_, _ = buf.WriteRune(ch)
+			foundRatio = true
+		default:
+			// Non-number character
+			return nil
 		}
 	}
 	bufStr := buf.String()

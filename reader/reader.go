@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"unicode"
 )
 
@@ -32,7 +34,7 @@ func (r *Reader) Read(i *Input) (Expression, error) {
 				}
 				rawToken := tokenBuf.String()
 				if !seenEscape {
-					if tmpNum := NewNumberFromString(rawToken); tmpNum != nil {
+					if tmpNum := NewNumberFromString(rawToken, 10); tmpNum != nil {
 						return tmpNum, nil
 					}
 				}
@@ -49,11 +51,7 @@ func (r *Reader) Read(i *Input) (Expression, error) {
 		}
 		switch st {
 		case ReadtableSyntaxTypeInvalid:
-			return nil, InvalidCharError{
-				ch:      ch,
-				line:    i.line,
-				linePos: i.linePos,
-			}
+			return nil, newReaderError(i, "invalid character: %q (%#x)", ch, ch)
 		case ReadtableSyntaxTypeWhitespace:
 			if tokenBuf.Len() > 0 {
 				if err := i.UnreadRune(); err != nil {
@@ -61,7 +59,7 @@ func (r *Reader) Read(i *Input) (Expression, error) {
 				}
 				rawToken := tokenBuf.String()
 				if !seenEscape {
-					if tmpNum := NewNumberFromString(rawToken); tmpNum != nil {
+					if tmpNum := NewNumberFromString(rawToken, 10); tmpNum != nil {
 						return tmpNum, nil
 					}
 				}
@@ -77,7 +75,7 @@ func (r *Reader) Read(i *Input) (Expression, error) {
 				}
 				rawToken := tokenBuf.String()
 				if !seenEscape {
-					if tmpNum := NewNumberFromString(rawToken); tmpNum != nil {
+					if tmpNum := NewNumberFromString(rawToken, 10); tmpNum != nil {
 						return tmpNum, nil
 					}
 				}
@@ -161,7 +159,117 @@ func readLiteral(r *Reader, i *Input, initialChar rune) (Expression, error) {
 }
 
 func readCloseParen(r *Reader, i *Input, initialChar rune) (Expression, error) {
-	return nil, fmt.Errorf("unmatched close parenthesis")
+	return nil, newReaderError(i, "unmatched close parenthesis")
+}
+
+func readDispatch(r *Reader, i *Input, initialChar rune) (Expression, error) {
+	// initialChar is '#'; the next rune is the dispatch character.
+	dispatch, _, err := i.ReadRune()
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return &Symbol{name: "#"}, nil
+		}
+		return nil, err
+	}
+
+	switch dispatch {
+	case 'b', 'B', 'o', 'O', 'x', 'X':
+		// Simple radix number forms: #b, #o, #x
+		return readDispatchRadixNumber(r, i, dispatch)
+	default:
+		// Complex radix number forms: #<radix>r<number>
+		if unicode.IsDigit(dispatch) {
+			return readDispatchRadixNumber(r, i, dispatch)
+		}
+	}
+
+	return nil, newReaderError(i, "unknown dispatch macro #%c", dispatch)
+}
+
+// readDispatchRadixNumber reads and parses a radix-prefixed number (#b, #o, #x,
+// or #<digits>r<number>) after the initial '#' and dispatch character have
+// been consumed. It returns the parsed number or nil, and an optional error
+func readDispatchRadixNumber(r *Reader, i *Input, dispatch rune) (Expression, error) {
+	radix := 10
+	var radixDigits []rune
+
+	if unicode.IsDigit(dispatch) {
+		// #<digits>r<number> form
+		radixDigits = []rune{dispatch}
+		for {
+			next, _, err := i.ReadRune()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				return nil, err
+			}
+			if unicode.IsDigit(next) {
+				radixDigits = append(radixDigits, next)
+				continue
+			}
+			if err := i.UnreadRune(); err != nil {
+				return nil, err
+			}
+			break
+		}
+		next, _, err := i.ReadRune()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, newReaderError(i, "invalid radix specifier: missing 'r'")
+			}
+			return nil, err
+		}
+		if next != 'r' && next != 'R' {
+			return nil, newReaderError(i, "invalid radix specifier: expected 'r'")
+		}
+		radix, err = strconv.Atoi(string(radixDigits))
+		if err != nil {
+			return nil, newReaderError(i, "invalid radix specifier: %v", err)
+		}
+		if radix < 2 || radix > 36 {
+			return nil, newReaderError(i, "invalid radix specifier: radix must be between 2 and 36")
+		}
+	} else {
+		switch dispatch {
+		case 'b', 'B':
+			radix = 2
+		case 'o', 'O':
+			radix = 8
+		case 'x', 'X':
+			radix = 16
+		}
+	}
+
+	// Read number digits (without the #<radix> prefix)
+	var numDigits strings.Builder
+	for {
+		next, _, err := i.ReadRune()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
+		}
+		st := r.rt.SyntaxTypeFunc(next)
+		if st == ReadtableSyntaxTypeWhitespace ||
+			st == ReadtableSyntaxTypeMacroTerminating ||
+			st == ReadtableSyntaxTypeMacroNonTerminating ||
+			st == ReadtableSyntaxTypeSingleEscape ||
+			st == ReadtableSyntaxTypeMultipleEscape ||
+			st == ReadtableSyntaxTypeInvalid {
+			if err := i.UnreadRune(); err != nil {
+				return nil, err
+			}
+			break
+		}
+		numDigits.WriteRune(next)
+	}
+
+	if tmpNum := NewNumberFromString(numDigits.String(), radix); tmpNum != nil {
+		return tmpNum, nil
+	}
+	return nil, newReaderError(i, "invalid number %q for radix %d", numDigits.String(), radix)
 }
 
 func readList(r *Reader, i *Input, initialChar rune) (Expression, error) {
