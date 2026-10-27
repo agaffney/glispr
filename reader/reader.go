@@ -20,7 +20,21 @@ func NewReader() *Reader {
 	}
 }
 
+// errSkipped is returned by readOne when a macro (such as a comment) consumed
+// input without producing an expression.
+var errSkipped = errors.New("macro produced no expression")
+
 func (r *Reader) Read(i *Input) (Expression, error) {
+	for {
+		expr, err := r.readOne(i)
+		if errors.Is(err, errSkipped) {
+			continue
+		}
+		return expr, err
+	}
+}
+
+func (r *Reader) readOne(i *Input) (Expression, error) {
 	tokenBuf := bytes.NewBuffer(nil)
 	tokenEscaped := make([]bool, 0)
 	multipleEscape := false
@@ -95,7 +109,7 @@ func (r *Reader) Read(i *Input) (Expression, error) {
 				return nil, err
 			}
 			if expr == nil {
-				continue
+				return nil, errSkipped
 			}
 			return expr, nil
 		case ReadtableSyntaxTypeSingleEscape:
@@ -173,6 +187,11 @@ func readDispatch(r *Reader, i *Input, initialChar rune) (Expression, error) {
 	}
 
 	switch dispatch {
+	case '|':
+		if err := readBlockComment(r, i); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	case 'b', 'B', 'o', 'O', 'x', 'X':
 		// Simple radix number forms: #b, #o, #x
 		return readDispatchRadixNumber(r, i, dispatch)
@@ -184,6 +203,48 @@ func readDispatch(r *Reader, i *Input, initialChar rune) (Expression, error) {
 	}
 
 	return nil, newReaderError(i, "unknown dispatch macro #%c", dispatch)
+}
+
+func readBlockComment(r *Reader, i *Input) error {
+	depth := 1
+	for depth > 0 {
+		ch, _, err := i.ReadRune()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return newReaderError(i, "unterminated block comment")
+			}
+			return err
+		}
+		switch ch {
+		case '#':
+			next, _, err := i.ReadRune()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					return newReaderError(i, "unterminated block comment")
+				}
+				return err
+			}
+			if next == '|' {
+				depth++
+			} else if err := i.UnreadRune(); err != nil {
+				return err
+			}
+		case '|':
+			next, _, err := i.ReadRune()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					return newReaderError(i, "unterminated block comment")
+				}
+				return err
+			}
+			if next == '#' {
+				depth--
+			} else if err := i.UnreadRune(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // readDispatchRadixNumber reads and parses a radix-prefixed number (#b, #o, #x,
@@ -291,8 +352,11 @@ func readList(r *Reader, i *Input, initialChar rune) (Expression, error) {
 		if err = i.UnreadRune(); err != nil {
 			return nil, err
 		}
-		item, err = r.Read(i)
+		item, err = r.readOne(i)
 		if err != nil {
+			if errors.Is(err, errSkipped) {
+				continue
+			}
 			return nil, err
 		}
 		items = append(items, item)
