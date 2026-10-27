@@ -27,6 +27,18 @@ func TestReaderString(t *testing.T) {
 			input:         `"foo \" bar"`,
 			expectedValue: `foo " bar`,
 		},
+		{
+			input:         `"foo \\ bar"`,
+			expectedValue: `foo \ bar`,
+		},
+		{
+			input:         `"\\"`,
+			expectedValue: `\`,
+		},
+		{
+			input:         `"foo \\\" bar"`,
+			expectedValue: `foo \" bar`,
+		},
 	}
 	r := reader.NewReader()
 	for _, testDef := range testDefs {
@@ -161,6 +173,18 @@ func TestReaderSymbol(t *testing.T) {
 			input:        `|(b^2) - 4*a*c|`,
 			expectedName: `(b^2) - 4*a*c`,
 		},
+		{
+			input:        `a#b`,
+			expectedName: `A#B`,
+		},
+		{
+			input:        `a#b#c`,
+			expectedName: `A#B#C`,
+		},
+		{
+			input:        `foo#`,
+			expectedName: `FOO#`,
+		},
 	}
 	r := reader.NewReader()
 	for _, testDef := range testDefs {
@@ -205,6 +229,13 @@ func TestReaderList(t *testing.T) {
 			expectedItems: []reader.Expression{
 				reader.NewSymbol("FOO"),
 				reader.NewString("bar"),
+			},
+		},
+		{
+			input: `(a#b c)`,
+			expectedItems: []reader.Expression{
+				reader.NewSymbol("A#B"),
+				reader.NewSymbol("C"),
 			},
 		},
 	}

@@ -84,6 +84,12 @@ func (r *Reader) readOne(i *Input) (Expression, error) {
 			continue
 		case ReadtableSyntaxTypeMacroTerminating, ReadtableSyntaxTypeMacroNonTerminating:
 			if tokenBuf.Len() > 0 {
+				if st == ReadtableSyntaxTypeMacroNonTerminating {
+					// Non-terminating macro characters are constituents inside a token
+					_, _ = tokenBuf.WriteRune(ch)
+					tokenEscaped = append(tokenEscaped, false)
+					continue
+				}
 				if err := i.UnreadRune(); err != nil {
 					return nil, err
 				}
@@ -146,19 +152,19 @@ func readString(r *Reader, i *Input, initialChar rune) (Expression, error) {
 			return nil, err
 		}
 		st = r.rt.SyntaxTypeFunc(ch)
-		switch st {
-		case ReadtableSyntaxTypeSingleEscape:
-			escape = true
-			continue
-		default:
-			if !escape && ch == initialChar {
+		if !escape {
+			if st == ReadtableSyntaxTypeSingleEscape {
+				escape = true
+				continue
+			}
+			if ch == initialChar {
 				return &String{
 					val: buf.String(),
 				}, nil
 			}
-			_, _ = buf.WriteRune(ch)
-			escape = false
 		}
+		_, _ = buf.WriteRune(ch)
+		escape = false
 	}
 }
 
