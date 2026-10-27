@@ -45,11 +45,13 @@ func (i *Input) UnreadRune() error {
 	if err != nil {
 		return err
 	}
-	// Decrement line pos
-	i.linePos--
-	if i.linePos < 1 {
+	if i.linePos == 0 {
+		// The unread rune was a newline, which ReadRune counted as the last
+		// position of the previous line. Go back to just before it.
 		i.line--
-		i.linePos = i.prevLinePos
+		i.linePos = i.prevLinePos - 1
+	} else {
+		i.linePos--
 	}
 	return err
 }

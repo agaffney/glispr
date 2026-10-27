@@ -136,7 +136,17 @@ func NewNumberRatio(ratVal *big.Rat) *Number {
 	}
 }
 
+// NewNumberFromString parses val as a number in the given radix. It returns
+// nil if val is not a number.
 func NewNumberFromString(val string, radix int) *Number {
+	num, _ := parseNumber(val, radix)
+	return num
+}
+
+// parseNumber returns nil without an error if val is not a number. An error is
+// returned for input that has number syntax but cannot be represented, such as
+// a ratio with a zero denominator.
+func parseNumber(val string, radix int) (*Number, error) {
 	foundRatio := false
 	foundFloat := false
 	buf := bytes.NewBuffer(nil)
@@ -151,12 +161,12 @@ func NewNumberFromString(val string, radix int) *Number {
 		case ch == '-' || ch == '+':
 			if foundRatio {
 				// No sign allowed on denominator
-				return nil
+				return nil, nil
 			}
 			_, _ = buf.WriteRune(ch)
 		case ch == '.':
 			if radix != 10 && i != len(val)-1 {
-				return nil
+				return nil, nil
 			}
 			_, _ = buf.WriteRune(ch)
 			if i != len(val)-1 {
@@ -172,7 +182,7 @@ func NewNumberFromString(val string, radix int) *Number {
 			foundRatio = true
 		default:
 			// Non-number character
-			return nil
+			return nil, nil
 		}
 	}
 	bufStr := buf.String()
@@ -185,41 +195,44 @@ func NewNumberFromString(val string, radix int) *Number {
 		// Parse number using big.Float
 		tmpFloat := new(big.Float)
 		if _, ok := tmpFloat.SetString(bufStr); !ok {
-			return nil
+			return nil, nil
 		}
 		return &Number{
 			typ:      NumberTypeFloat,
 			floatVal: tmpFloat.SetPrec(53), // This precision is the same you get with big.NewFloat(n)
-		}
+		}, nil
 	} else if foundRatio {
 		// Parse number as ratio
 		parts := strings.Split(bufStr, `/`)
 		if len(parts) != 2 {
-			return nil
+			return nil, nil
 		}
 		tmpNum := new(big.Int)
 		if _, ok := tmpNum.SetString(parts[0], radix); !ok {
-			return nil
+			return nil, nil
 		}
 		tmpDenom := new(big.Int)
 		if _, ok := tmpDenom.SetString(parts[1], radix); !ok {
-			return nil
+			return nil, nil
+		}
+		if tmpDenom.Sign() == 0 {
+			return nil, errDivideByZero
 		}
 		tmpRat := new(big.Rat).SetFrac(tmpNum, tmpDenom)
 		return &Number{
 			typ:    NumberTypeRatio,
 			ratVal: tmpRat,
-		}
+		}, nil
 	} else {
 		// Parse number as integer
 		tmpInt := new(big.Int)
 		if _, ok := tmpInt.SetString(bufStr, radix); !ok {
-			return nil
+			return nil, nil
 		}
 		return &Number{
 			typ:    NumberTypeInteger,
 			intVal: tmpInt,
-		}
+		}, nil
 	}
 }
 

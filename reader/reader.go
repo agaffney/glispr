@@ -24,6 +24,20 @@ func NewReader() *Reader {
 // input without producing an expression.
 var errSkipped = errors.New("macro produced no expression")
 
+// readNumberToken parses raw as a number. It returns nil without an error if
+// raw is not a number.
+//
+// parseNumber has no access to the input, so the errors it returns (such as
+// division by zero) carry no position information. They must be wrapped in a
+// ReaderError here so that callers get the line and offset of the problem.
+func readNumberToken(i *Input, raw string, radix int) (*Number, error) {
+	num, err := parseNumber(raw, radix)
+	if err != nil {
+		return nil, newReaderError(i, "%v in %q", err, raw)
+	}
+	return num, nil
+}
+
 func (r *Reader) Read(i *Input) (Expression, error) {
 	for {
 		expr, err := r.readOne(i)
@@ -48,7 +62,11 @@ func (r *Reader) readOne(i *Input) (Expression, error) {
 				}
 				rawToken := tokenBuf.String()
 				if !seenEscape {
-					if tmpNum := NewNumberFromString(rawToken, 10); tmpNum != nil {
+					tmpNum, err := readNumberToken(i, rawToken, 10)
+					if err != nil {
+						return nil, err
+					}
+					if tmpNum != nil {
 						return tmpNum, nil
 					}
 				}
@@ -73,7 +91,11 @@ func (r *Reader) readOne(i *Input) (Expression, error) {
 				}
 				rawToken := tokenBuf.String()
 				if !seenEscape {
-					if tmpNum := NewNumberFromString(rawToken, 10); tmpNum != nil {
+					tmpNum, err := readNumberToken(i, rawToken, 10)
+					if err != nil {
+						return nil, err
+					}
+					if tmpNum != nil {
 						return tmpNum, nil
 					}
 				}
@@ -95,7 +117,11 @@ func (r *Reader) readOne(i *Input) (Expression, error) {
 				}
 				rawToken := tokenBuf.String()
 				if !seenEscape {
-					if tmpNum := NewNumberFromString(rawToken, 10); tmpNum != nil {
+					tmpNum, err := readNumberToken(i, rawToken, 10)
+					if err != nil {
+						return nil, err
+					}
+					if tmpNum != nil {
 						return tmpNum, nil
 					}
 				}
@@ -333,7 +359,11 @@ func readDispatchRadixNumber(r *Reader, i *Input, dispatch rune) (Expression, er
 		numDigits.WriteRune(next)
 	}
 
-	if tmpNum := NewNumberFromString(numDigits.String(), radix); tmpNum != nil {
+	tmpNum, err := readNumberToken(i, numDigits.String(), radix)
+	if err != nil {
+		return nil, err
+	}
+	if tmpNum != nil {
 		return tmpNum, nil
 	}
 	return nil, newReaderError(i, "invalid number %q for radix %d", numDigits.String(), radix)

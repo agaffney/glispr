@@ -602,7 +602,7 @@ func TestReaderDispatchRadix(t *testing.T) {
 	})
 
 	t.Run("malformed radix numbers error", func(t *testing.T) {
-		inputs := []string{"#xz", "#2rabc", "#x", "#2r", "#2r ", "#xF.F", "#1r0", "#37r0", "#999999999999999999999999r0"}
+		inputs := []string{"#xz", "#2rabc", "#x", "#2r", "#2r ", "#xF.F", "#1r0", "#37r0", "#999999999999999999999999r0", "#x1/0", "#2r-1/0"}
 		for _, input := range inputs {
 			i, err := reader.NewInput(strings.NewReader(input))
 			assert.NoError(t, err)
@@ -678,6 +678,13 @@ func TestReaderError(t *testing.T) {
 		wantOffset int
 	}{
 		{input: ")", wantLine: 1, wantOffset: 1},
+		{input: "1/0", wantLine: 1, wantOffset: 3},
+		{input: "(1/0)", wantLine: 1, wantOffset: 4},
+		// Unreading the newline that ends a token must not move the error position
+		{input: "1/0\n", wantLine: 1, wantOffset: 3},
+		{input: "\n1/0\n", wantLine: 2, wantOffset: 3},
+		// Unreading the first character of a line must stay on that line
+		{input: "(\n1/0)", wantLine: 2, wantOffset: 3},
 		{input: "#p", wantLine: 1, wantOffset: 2},
 		{input: "\n#p", wantLine: 2, wantOffset: 2},
 		{input: "#1r0", wantLine: 1, wantOffset: 3},
@@ -742,5 +749,13 @@ func TestNewNumberFromString(t *testing.T) {
 		if !tmp.Equal(testDef.expectedNum) {
 			t.Errorf("NewNumberFromString(%q, %d) does not match expected value\n\n  Expected: %s\n  Actual: %s", testDef.val, testDef.radix, testDef.expectedNum.String(), tmp.String())
 		}
+	}
+}
+
+func TestNewNumberFromStringZeroDenominator(t *testing.T) {
+	for _, val := range []string{"1/0", "-1/0", "0/0"} {
+		assert.NotPanics(t, func() {
+			assert.Nil(t, reader.NewNumberFromString(val, 10), "expected %q to not be a number", val)
+		})
 	}
 }
