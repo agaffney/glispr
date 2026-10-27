@@ -583,6 +583,63 @@ func TestReaderDispatchRadix(t *testing.T) {
 	})
 }
 
+func TestReaderBlockComment(t *testing.T) {
+	r := reader.NewReader()
+
+	t.Run("discards block comment", func(t *testing.T) {
+		i, err := reader.NewInput(strings.NewReader("#| comment |#foo"))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		assert.NoError(t, err)
+		assert.IsType(t, &reader.Symbol{}, tmp)
+		assert.Equal(t, "FOO", tmp.(*reader.Symbol).Name())
+	})
+
+	t.Run("supports nested block comments", func(t *testing.T) {
+		i, err := reader.NewInput(strings.NewReader("#| outer #| inner |# outer |#bar"))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		assert.NoError(t, err)
+		assert.IsType(t, &reader.Symbol{}, tmp)
+		assert.Equal(t, "BAR", tmp.(*reader.Symbol).Name())
+	})
+
+	t.Run("works inside lists", func(t *testing.T) {
+		i, err := reader.NewInput(strings.NewReader("(foo #| comment |# bar)"))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		assert.NoError(t, err)
+		assert.Equal(t, reader.NewList([]reader.Expression{
+			reader.NewSymbol("FOO"),
+			reader.NewSymbol("BAR"),
+		}), tmp)
+	})
+
+	t.Run("trailing block comment inside list", func(t *testing.T) {
+		i, err := reader.NewInput(strings.NewReader("(foo #| comment |#)"))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		assert.NoError(t, err)
+		assert.Equal(t, reader.NewList([]reader.Expression{
+			reader.NewSymbol("FOO"),
+		}), tmp)
+	})
+
+	t.Run("unterminated block comment errors", func(t *testing.T) {
+		i, err := reader.NewInput(strings.NewReader("#| unterminated"))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unterminated block comment")
+		assert.Nil(t, tmp)
+	})
+}
+
 func TestReaderError(t *testing.T) {
 	testDefs := []struct {
 		input      string
