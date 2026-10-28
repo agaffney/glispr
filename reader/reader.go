@@ -40,13 +40,34 @@ func readNumberToken(i *Input, raw string, radix int) (*types.Number, error) {
 	return num, nil
 }
 
+// readResult is what readOne produces: the expression, plus the token it came
+// from when it was read from a token rather than by a macro function.
+type readResult struct {
+	expr types.Expression
+	tok  *token
+}
+
+// finishToken converts a completed token into a number or a symbol.
+func (r *Reader) finishToken(i *Input, tok *token) (readResult, error) {
+	if !tok.hasEscape() {
+		tmpNum, err := readNumberToken(i, tok.String(), 10)
+		if err != nil {
+			return readResult{}, err
+		}
+		if tmpNum != nil {
+			return readResult{expr: tmpNum, tok: tok}, nil
+		}
+	}
+	return readResult{expr: types.NewSymbol(r.caseConvert(tok)), tok: tok}, nil
+}
+
 func (r *Reader) Read(i *Input) (types.Expression, error) {
 	for {
-		expr, err := r.readOne(i)
+		res, err := r.readOne(i)
 		if errors.Is(err, errSkipped) {
 			continue
 		}
-		return expr, err
+		return res.expr, err
 	}
 }
 
@@ -63,34 +84,22 @@ func (r *Reader) readRequired(i *Input) (types.Expression, error) {
 	return expr, nil
 }
 
-func (r *Reader) readOne(i *Input) (types.Expression, error) {
-	tokenBuf := bytes.NewBuffer(nil)
-	tokenEscaped := make([]bool, 0)
+func (r *Reader) readOne(i *Input) (readResult, error) {
+	tok := &token{}
 	multipleEscape := false
-	seenEscape := false
 	for {
 		ch, _, err := i.ReadRune()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if multipleEscape {
-					return nil, newReaderError(i, "unexpected end of file in multiple escape")
+					return readResult{}, newReaderError(i, "unexpected end of file in multiple escape")
 				}
-				if tokenBuf.Len() == 0 {
-					return nil, nil
+				if tok.len() == 0 {
+					return readResult{}, nil
 				}
-				rawToken := tokenBuf.String()
-				if !seenEscape {
-					tmpNum, err := readNumberToken(i, rawToken, 10)
-					if err != nil {
-						return nil, err
-					}
-					if tmpNum != nil {
-						return tmpNum, nil
-					}
-				}
-				return types.NewSymbol(r.caseConvert(rawToken, tokenEscaped)), nil
+				return r.finishToken(i, tok)
 			}
-			return nil, err
+			return readResult{}, err
 		}
 		st := r.rt.SyntaxTypeFunc(ch)
 		// Treat valid characters inside multiple escape as constituent syntax type
@@ -99,84 +108,59 @@ func (r *Reader) readOne(i *Input) (types.Expression, error) {
 		}
 		switch st {
 		case ReadtableSyntaxTypeInvalid:
-			return nil, newReaderError(i, "invalid character: %q (%#x)", ch, ch)
+			return readResult{}, newReaderError(i, "invalid character: %q (%#x)", ch, ch)
 		case ReadtableSyntaxTypeWhitespace:
-			if tokenBuf.Len() > 0 {
+			if tok.len() > 0 {
 				if err := i.UnreadRune(); err != nil {
-					return nil, err
+					return readResult{}, err
 				}
-				rawToken := tokenBuf.String()
-				if !seenEscape {
-					tmpNum, err := readNumberToken(i, rawToken, 10)
-					if err != nil {
-						return nil, err
-					}
-					if tmpNum != nil {
-						return tmpNum, nil
-					}
-				}
-				return types.NewSymbol(r.caseConvert(rawToken, tokenEscaped)), nil
+				return r.finishToken(i, tok)
 			}
 			continue
 		case ReadtableSyntaxTypeMacroTerminating, ReadtableSyntaxTypeMacroNonTerminating:
-			if tokenBuf.Len() > 0 {
+			if tok.len() > 0 {
 				if st == ReadtableSyntaxTypeMacroNonTerminating {
 					// Non-terminating macro characters are constituents inside a token
-					_, _ = tokenBuf.WriteRune(ch)
-					tokenEscaped = append(tokenEscaped, false)
+					tok.add(ch, false)
 					continue
 				}
 				if err := i.UnreadRune(); err != nil {
-					return nil, err
+					return readResult{}, err
 				}
-				rawToken := tokenBuf.String()
-				if !seenEscape {
-					tmpNum, err := readNumberToken(i, rawToken, 10)
-					if err != nil {
-						return nil, err
-					}
-					if tmpNum != nil {
-						return tmpNum, nil
-					}
-				}
-				return types.NewSymbol(r.caseConvert(rawToken, tokenEscaped)), nil
+				return r.finishToken(i, tok)
 			}
 			fn, ok := r.rt.MacroFuncs[ch]
 			if !ok {
 				// Write to token buffer if no macro function defined
-				_, _ = tokenBuf.WriteRune(ch)
-				tokenEscaped = append(tokenEscaped, false)
+				tok.add(ch, false)
 				continue
 			}
 			expr, err := fn(r, i, ch)
 			if err != nil {
-				return nil, err
+				return readResult{}, err
 			}
 			if expr == nil {
-				return nil, errSkipped
+				return readResult{}, errSkipped
 			}
-			return expr, nil
+			return readResult{expr: expr}, nil
 		case ReadtableSyntaxTypeSingleEscape:
 			// Read next character and write to token buffer
 			ch, _, err = i.ReadRune()
 			if err != nil {
 				if errors.Is(err, io.EOF) {
-					return nil, newReaderError(i, "unexpected end of file after single escape")
+					return readResult{}, newReaderError(i, "unexpected end of file after single escape")
 				}
-				return nil, err
+				return readResult{}, err
 			}
-			_, _ = tokenBuf.WriteRune(ch)
-			tokenEscaped = append(tokenEscaped, true)
-			seenEscape = true
+			tok.add(ch, true)
 		case ReadtableSyntaxTypeMultipleEscape:
 			multipleEscape = !multipleEscape
-			seenEscape = true
+			tok.sawEscape = true
 			continue
 		case ReadtableSyntaxTypeConstituent:
-			_, _ = tokenBuf.WriteRune(ch)
-			tokenEscaped = append(tokenEscaped, multipleEscape)
+			tok.add(ch, multipleEscape)
 		default:
-			return nil, fmt.Errorf("unknown syntax type %d, this is probably a bug", st)
+			return readResult{}, fmt.Errorf("unknown syntax type %d, this is probably a bug", st)
 		}
 	}
 }
@@ -385,7 +369,7 @@ func readDispatchRadixNumber(r *Reader, i *Input, dispatch rune) (types.Expressi
 
 func readList(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
 	items := []types.Expression{}
-	var item types.Expression
+	var res readResult
 	var ch rune
 	var err error
 	for {
@@ -405,14 +389,14 @@ func readList(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
 		if err = i.UnreadRune(); err != nil {
 			return nil, err
 		}
-		item, err = r.readOne(i)
+		res, err = r.readOne(i)
 		if err != nil {
 			if errors.Is(err, errSkipped) {
 				continue
 			}
 			return nil, err
 		}
-		items = append(items, item)
+		items = append(items, res.expr)
 	}
 	return types.NewList(items), nil
 }
@@ -438,19 +422,21 @@ func readComment(r *Reader, i *Input, initialChar rune) (types.Expression, error
 	return nil, nil
 }
 
-func (r *Reader) caseConvert(raw string, escaped []bool) string {
-	runes := []rune(raw)
-	out := append([]rune(nil), runes...)
+func (r *Reader) caseConvert(tok *token) string {
+	out := make([]rune, len(tok.chars))
+	for i, c := range tok.chars {
+		out[i] = c.r
+	}
 	switch r.rt.CaseMode {
 	case ReadtableCaseModeUpcase:
-		for i := range out {
-			if i < len(escaped) && !escaped[i] {
+		for i, c := range tok.chars {
+			if !c.escaped {
 				out[i] = unicode.ToUpper(out[i])
 			}
 		}
 	case ReadtableCaseModeDowncase:
-		for i := range out {
-			if i < len(escaped) && !escaped[i] {
+		for i, c := range tok.chars {
+			if !c.escaped {
 				out[i] = unicode.ToLower(out[i])
 			}
 		}
@@ -459,11 +445,8 @@ func (r *Reader) caseConvert(raw string, escaped []bool) string {
 		allUpper := true
 		allLower := true
 		hasLetter := false
-		for i := range out {
-			if i >= len(escaped) || escaped[i] {
-				continue
-			}
-			if !unicode.IsLetter(out[i]) {
+		for i, c := range tok.chars {
+			if c.escaped || !unicode.IsLetter(out[i]) {
 				continue
 			}
 			hasLetter = true
@@ -478,14 +461,14 @@ func (r *Reader) caseConvert(raw string, escaped []bool) string {
 			return string(out)
 		}
 		if allUpper && !allLower {
-			for i := range out {
-				if i < len(escaped) && !escaped[i] && unicode.IsLetter(out[i]) && unicode.IsUpper(out[i]) {
+			for i, c := range tok.chars {
+				if !c.escaped && unicode.IsLetter(out[i]) && unicode.IsUpper(out[i]) {
 					out[i] = unicode.ToLower(out[i])
 				}
 			}
 		} else if allLower && !allUpper {
-			for i := range out {
-				if i < len(escaped) && !escaped[i] && unicode.IsLetter(out[i]) && unicode.IsLower(out[i]) {
+			for i, c := range tok.chars {
+				if !c.escaped && unicode.IsLetter(out[i]) && unicode.IsLower(out[i]) {
 					out[i] = unicode.ToUpper(out[i])
 				}
 			}
