@@ -801,6 +801,22 @@ func TestReaderError(t *testing.T) {
 		{input: "|a\nbc", wantLine: 2, wantOffset: 2},
 		{input: "'\n", wantLine: 2, wantOffset: 1},
 		{input: "(a\n\n'\n", wantLine: 4, wantOffset: 1},
+		// Dot context errors
+		{input: ".", wantLine: 1, wantOffset: 1},
+		{input: ". ", wantLine: 1, wantOffset: 1},
+		{input: "'.", wantLine: 1, wantOffset: 2},
+		{input: "(a '.)", wantLine: 1, wantOffset: 5},
+		{input: "(.)", wantLine: 1, wantOffset: 2},
+		{input: "(. a)", wantLine: 1, wantOffset: 2},
+		{input: "(a . . b)", wantLine: 1, wantOffset: 6},
+		{input: "(a b . . )", wantLine: 1, wantOffset: 8},
+		{input: "..", wantLine: 1, wantOffset: 2},
+		{input: "(a ... b)", wantLine: 1, wantOffset: 6},
+		{input: "(a . )", wantLine: 1, wantOffset: 6},
+		{input: "(a . b c)", wantLine: 1, wantOffset: 8},
+		{input: "(a . b . c)", wantLine: 1, wantOffset: 8},
+		{input: "(a ..)", wantLine: 1, wantOffset: 5},
+		{input: "(a\n.)", wantLine: 2, wantOffset: 2},
 		{input: "#p", wantLine: 1, wantOffset: 2},
 		{input: "\n#p", wantLine: 2, wantOffset: 2},
 		{input: "#1r0", wantLine: 1, wantOffset: 3},
@@ -825,19 +841,96 @@ func TestReaderError(t *testing.T) {
 	}
 }
 
-// Dotted pair syntax is not supported yet: the "." is read as an ordinary
-// symbol, so "(a . b)" is a proper three element list.
-//
-// TODO: remove this test, or replace it with one expecting a dotted pair, once
-// the reader supports dotted pair syntax. It is expected to fail at that point.
-func TestReaderDottedPairNotSupported(t *testing.T) {
-	r := reader.NewReader()
-	i, err := reader.NewInput(strings.NewReader("(a . b)"))
-	assert.NoError(t, err)
+func TestReaderDottedList(t *testing.T) {
+	sym := types.NewSymbol
+	list := types.NewList
+	tail := types.NewListTail
+	exprs := func(e ...types.Expression) []types.Expression { return e }
 
-	tmp, err := r.Read(i)
+	testDefs := []struct {
+		input string
+		want  types.Expression
+	}{
+		{`(a . b)`, tail(exprs(sym("A")), sym("B"))},
+		{`(a b . c)`, tail(exprs(sym("A"), sym("B")), sym("C"))},
+		{`(a . "b")`, tail(exprs(sym("A")), types.NewString("b"))},
+		// A delimiter ends a token, so no whitespace is needed around the dot there
+		{`(a .(b))`, tail(exprs(sym("A")), list(exprs(sym("B"))))},
+		{`((a). b)`, tail(exprs(list(exprs(sym("A")))), sym("B"))},
+		// Dots inside larger tokens are not the dot
+		{`(a .b)`, list(exprs(sym("A"), sym(".B")))},
+		{`(a. b)`, list(exprs(sym("A."), sym("B")))},
+		{`(a .5 b)`, list(exprs(sym("A"), types.NewNumberFloat(big.NewFloat(0.5)), sym("B")))},
+		// Escaped dots are symbols
+		{`(a \. b)`, list(exprs(sym("A"), sym("."), sym("B")))},
+		{`(a |.| b)`, list(exprs(sym("A"), sym("."), sym("B")))},
+		{`(a \.\. b)`, list(exprs(sym("A"), sym(".."), sym("B")))},
+		{`(a . \.)`, tail(exprs(sym("A")), sym("."))},
+		// The tail and the items can be quoted
+		{`(a . 'b)`, tail(exprs(sym("A")), types.NewLiteral(sym("B")))},
+		{`('a . b)`, tail(exprs(types.NewLiteral(sym("A"))), sym("B"))},
+		// A list in the tail makes the whole list proper
+		{`(a . (b c))`, list(exprs(sym("A"), sym("B"), sym("C")))},
+		{`(a . ())`, list(exprs(sym("A")))},
+		// Comments are allowed around the dot and the tail
+		{`(a #| x |# . #| y |# b #| z |#)`, tail(exprs(sym("A")), sym("B"))},
+		{"(a . b ; c\n)", tail(exprs(sym("A")), sym("B"))},
+		// Nested
+		{`((a . b) . (c . d))`, tail(
+			exprs(tail(exprs(sym("A")), sym("B"))),
+			tail(exprs(sym("C")), sym("D")),
+		)},
+	}
+	r := reader.NewReader()
+	for _, testDef := range testDefs {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		if !assert.NoError(t, err, "unexpected error for %q", testDef.input) {
+			continue
+		}
+		assert.Equal(t, testDef.want, tmp, "wrong result for %q", testDef.input)
+	}
+}
+
+func TestReaderDotError(t *testing.T) {
+	inputs := []string{
+		// Dot outside of a list
+		`.`,
+		`. `,
+		`'.`,
+		`(a '.)`,
+		// Misplaced dot in a list
+		`(.)`,
+		`(. a)`,
+		`(a .)`,
+		`(a . )`,
+		`(a . #| c |# )`,
+		`(a . b c)`,
+		`(a . b . c)`,
+		`(a . . b)`,
+		`(a b . . )`,
+		// Tokens made only of dots
+		`..`,
+		`(a ..)`,
+		`(a ... b)`,
+	}
+	r := reader.NewReader()
+	for _, input := range inputs {
+		i, err := reader.NewInput(strings.NewReader(input))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		assert.Error(t, err, "expected an error for %q", input)
+		assert.Nil(t, tmp, "expected no expression for %q", input)
+		var readerErr reader.ReaderError
+		assert.True(t, errors.As(err, &readerErr), "expected ReaderError for %q", input)
+	}
+
+	// A dot with nothing after it is an end of file error
+	i, err := reader.NewInput(strings.NewReader(`(a .`))
 	assert.NoError(t, err)
-	items, ok := types.ListItems(tmp)
-	assert.True(t, ok)
-	assert.Len(t, items, 3)
+	_, err = r.Read(i)
+	assert.ErrorContains(t, err, "end of file")
 }

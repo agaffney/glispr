@@ -86,6 +86,26 @@ func (t *token) started() bool { return len(t.chars) > 0 || t.sawEscape }
 // hasEscape reports whether the token was written using an escape character.
 func (t *token) hasEscape() bool { return t.sawEscape }
 
+// allDots reports whether the token is made up only of dots. Escaped characters
+// only have the alphabetic trait, so a token with an escape never qualifies.
+func (t *token) allDots() bool {
+	if len(t.chars) == 0 {
+		return false
+	}
+	for _, c := range t.chars {
+		if c.traits&traitDot == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// isSingleDot reports whether the token is exactly one unescaped dot, which is
+// the dot of a dotted list rather than a symbol.
+func (t *token) isSingleDot() bool {
+	return len(t.chars) == 1 && t.allDots()
+}
+
 // String returns the characters of the token exactly as read, without case
 // conversion.
 func (t *token) String() string {

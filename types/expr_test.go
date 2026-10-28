@@ -213,3 +213,21 @@ func TestNumberString(t *testing.T) {
 	assert.Equal(t, "2/3", types.NewNumberRatio(big.NewRat(4, 6)).String())
 	assert.Equal(t, "<unknown>", (&types.Number{}).String())
 }
+
+func TestNewListTail(t *testing.T) {
+	foo := types.NewSymbol("foo")
+	bar := types.NewSymbol("bar")
+	baz := types.NewSymbol("baz")
+
+	// With no items the tail is returned as is
+	assert.Same(t, baz, types.NewListTail(nil, baz))
+	assert.Same(t, types.Nil, types.NewListTail(nil, types.Nil))
+
+	assert.Equal(t, `(|foo| |bar| . |baz|)`, types.NewListTail([]types.Expression{foo, bar}, baz).String())
+	assert.Equal(t, `(|foo| |bar|)`, types.NewListTail([]types.Expression{foo, bar}, types.Nil).String())
+
+	var nilCons *types.Cons
+	assert.Panics(t, func() { types.NewListTail(nil, nil) })
+	assert.Panics(t, func() { types.NewListTail([]types.Expression{foo}, nil) })
+	assert.Panics(t, func() { types.NewListTail(nil, nilCons) })
+}

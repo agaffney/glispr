@@ -84,3 +84,32 @@ func TestTokenStarted(t *testing.T) {
 	tok.add('a', false)
 	assert.True(t, tok.started())
 }
+
+func TestTokenDots(t *testing.T) {
+	build := func(escapedFlags string) *token {
+		tok := &token{}
+		for _, f := range escapedFlags {
+			tok.add('.', f == 'e')
+		}
+		return tok
+	}
+
+	// u = unescaped dot, e = escaped dot
+	assert.True(t, build("u").allDots())
+	assert.True(t, build("u").isSingleDot())
+	assert.True(t, build("uu").allDots())
+	assert.False(t, build("uu").isSingleDot())
+
+	// An escaped dot is only alphabetic, so it is neither
+	assert.False(t, build("e").allDots())
+	assert.False(t, build("e").isSingleDot())
+	assert.False(t, build("ue").allDots())
+
+	// Other characters and empty tokens are not dots
+	other := &token{}
+	other.add('.', false)
+	other.add('a', false)
+	assert.False(t, other.allDots())
+	assert.False(t, (&token{}).allDots())
+	assert.False(t, (&token{}).isSingleDot())
+}

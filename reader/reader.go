@@ -47,8 +47,19 @@ type readResult struct {
 	tok  *token
 }
 
-// finishToken converts a completed token into a number or a symbol.
+// isDot reports whether the result came from a token that is a single
+// unescaped dot. Its expression is the symbol named ".", which must not be used
+// as a value: only readList gives the dot a meaning.
+func (res readResult) isDot() bool {
+	return res.tok != nil && res.tok.isSingleDot()
+}
+
+// finishToken converts a completed token into a number or a symbol. A token
+// made only of unescaped dots is an error, unless it is a single dot.
 func (r *Reader) finishToken(i *Input, tok *token) (readResult, error) {
+	if tok.allDots() && !tok.isSingleDot() {
+		return readResult{}, newReaderError(i, "token consists only of dots: %q", tok.String())
+	}
 	if !tok.hasEscape() {
 		tmpNum, err := readNumberToken(i, tok.String(), 10)
 		if err != nil {
@@ -66,6 +77,9 @@ func (r *Reader) Read(i *Input) (types.Expression, error) {
 		res, err := r.readOne(i)
 		if errors.Is(err, errSkipped) {
 			continue
+		}
+		if err == nil && res.isDot() {
+			return nil, newReaderError(i, "dot context error: dot outside of a list")
 		}
 		return res.expr, err
 	}
@@ -369,6 +383,9 @@ func readDispatchRadixNumber(r *Reader, i *Input, dispatch rune) (types.Expressi
 
 func readList(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
 	items := []types.Expression{}
+	// tail is the object after the dot, once it has been read
+	var tail types.Expression
+	dotSeen := false
 	var res readResult
 	var ch rune
 	var err error
@@ -384,6 +401,9 @@ func readList(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
 			continue
 		}
 		if ch == ')' {
+			if dotSeen && tail == nil {
+				return nil, newReaderError(i, "dot context error: nothing after dot in list")
+			}
 			break
 		}
 		if err = i.UnreadRune(); err != nil {
@@ -396,7 +416,25 @@ func readList(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
 			}
 			return nil, err
 		}
-		items = append(items, res.expr)
+		switch {
+		case res.isDot():
+			if len(items) == 0 {
+				return nil, newReaderError(i, "dot context error: nothing before dot in list")
+			}
+			if dotSeen {
+				return nil, newReaderError(i, "dot context error: more than one dot in list")
+			}
+			dotSeen = true
+		case dotSeen && tail != nil:
+			return nil, newReaderError(i, "dot context error: more than one object after dot in list")
+		case dotSeen:
+			tail = res.expr
+		default:
+			items = append(items, res.expr)
+		}
+	}
+	if tail != nil {
+		return types.NewListTail(items, tail), nil
 	}
 	return types.NewList(items), nil
 }
