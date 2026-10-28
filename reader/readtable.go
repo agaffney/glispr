@@ -1,6 +1,10 @@
 package reader
 
-import "unicode"
+import (
+	"unicode"
+
+	"github.com/agaffney/glispr/types"
+)
 
 type ReadtableCaseMode int
 
@@ -24,7 +28,7 @@ const (
 	ReadtableSyntaxTypeMultipleEscape
 )
 
-type ReadtableMacroFunc func(*Reader, *Input, rune) (Expression, error)
+type ReadtableMacroFunc func(*Reader, *Input, rune) (types.Expression, error)
 
 type ReadtableSyntaxTypeFunc func(rune) ReadtableSyntaxType
 

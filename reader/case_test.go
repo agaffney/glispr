@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/agaffney/glispr/types"
 )
 
 func TestReaderCaseUpcaseEscapes(t *testing.T) {
@@ -26,7 +28,7 @@ func TestReaderCaseUpcaseEscapes(t *testing.T) {
 		assert.NoError(t, err)
 		got, err := r.Read(i)
 		assert.NoError(t, err)
-		sym, ok := got.(*Symbol)
+		sym, ok := got.(*types.Symbol)
 		assert.True(t, ok, "expected symbol for %q", tc.input)
 		if ok {
 			assert.Equal(t, tc.want, sym.Name(), "input %q", tc.input)
@@ -51,7 +53,7 @@ func TestReaderCaseDowncase(t *testing.T) {
 		assert.NoError(t, err)
 		got, err := r.Read(i)
 		assert.NoError(t, err)
-		sym, ok := got.(*Symbol)
+		sym, ok := got.(*types.Symbol)
 		assert.True(t, ok, "expected symbol for %q", tc.input)
 		if ok {
 			assert.Equal(t, tc.want, sym.Name(), "input %q", tc.input)
@@ -77,7 +79,7 @@ func TestReaderCaseInvert(t *testing.T) {
 		assert.NoError(t, err)
 		got, err := r.Read(i)
 		assert.NoError(t, err)
-		sym, ok := got.(*Symbol)
+		sym, ok := got.(*types.Symbol)
 		assert.True(t, ok, "expected symbol for %q", tc.input)
 		if ok {
 			assert.Equal(t, tc.want, sym.Name(), "input %q", tc.input)
@@ -101,7 +103,7 @@ func TestReaderCasePreserve(t *testing.T) {
 		assert.NoError(t, err)
 		got, err := r.Read(i)
 		assert.NoError(t, err)
-		sym, ok := got.(*Symbol)
+		sym, ok := got.(*types.Symbol)
 		assert.True(t, ok, "expected symbol for %q", tc.input)
 		if ok {
 			assert.Equal(t, tc.want, sym.Name(), "input %q", tc.input)
