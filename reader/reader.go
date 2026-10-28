@@ -94,7 +94,7 @@ func (r *Reader) readOne(i *Input) (readResult, error) {
 				if multipleEscape {
 					return readResult{}, newReaderError(i, "unexpected end of file in multiple escape")
 				}
-				if tok.len() == 0 {
+				if !tok.started() {
 					return readResult{}, nil
 				}
 				return r.finishToken(i, tok)
@@ -110,7 +110,7 @@ func (r *Reader) readOne(i *Input) (readResult, error) {
 		case ReadtableSyntaxTypeInvalid:
 			return readResult{}, newReaderError(i, "invalid character: %q (%#x)", ch, ch)
 		case ReadtableSyntaxTypeWhitespace:
-			if tok.len() > 0 {
+			if tok.started() {
 				if err := i.UnreadRune(); err != nil {
 					return readResult{}, err
 				}
@@ -118,7 +118,7 @@ func (r *Reader) readOne(i *Input) (readResult, error) {
 			}
 			continue
 		case ReadtableSyntaxTypeMacroTerminating, ReadtableSyntaxTypeMacroNonTerminating:
-			if tok.len() > 0 {
+			if tok.started() {
 				if st == ReadtableSyntaxTypeMacroNonTerminating {
 					// Non-terminating macro characters are constituents inside a token
 					tok.add(ch, false)

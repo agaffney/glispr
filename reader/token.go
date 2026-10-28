@@ -79,7 +79,9 @@ func (t *token) add(r rune, escaped bool) {
 	t.chars = append(t.chars, tokenChar{r: r, escaped: escaped, traits: traits})
 }
 
-func (t *token) len() int { return len(t.chars) }
+// started reports whether any part of a token has been read. An empty multiple
+// escape (`||`) starts a token even though it adds no characters.
+func (t *token) started() bool { return len(t.chars) > 0 || t.sawEscape }
 
 // hasEscape reports whether the token was written using an escape character.
 func (t *token) hasEscape() bool { return t.sawEscape }

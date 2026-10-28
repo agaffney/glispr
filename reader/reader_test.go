@@ -186,6 +186,35 @@ func TestReaderSymbol(t *testing.T) {
 			input:        `foo#`,
 			expectedName: `FOO#`,
 		},
+		// An empty multiple escape is a symbol with an empty name
+		{
+			input:        `||`,
+			expectedName: ``,
+		},
+		{
+			input:        `|| `,
+			expectedName: ``,
+		},
+		{
+			input:        "||\n",
+			expectedName: ``,
+		},
+		{
+			input:        `||||`,
+			expectedName: ``,
+		},
+		{
+			input:        `||a`,
+			expectedName: `A`,
+		},
+		{
+			input:        `a||b`,
+			expectedName: `AB`,
+		},
+		{
+			input:        `1||`,
+			expectedName: `1`,
+		},
 	}
 	r := reader.NewReader()
 	for _, testDef := range testDefs {
@@ -204,6 +233,44 @@ func TestReaderSymbol(t *testing.T) {
 		assert.IsType(t, &types.Symbol{}, tmp, "did not get expected expression type for input: %s", testDef.input)
 		tmpName := tmp.(*types.Symbol).Name()
 		assert.Equal(t, testDef.expectedName, tmpName, "symbol name does not match expected value for input: %s", testDef.input)
+	}
+}
+
+// An empty multiple escape starts a token, so it must be handled the same way as
+// any other token no matter what ends it.
+func TestReaderEmptyMultipleEscapeTerminators(t *testing.T) {
+	sym := types.NewSymbol
+	testDefs := []struct {
+		input string
+		want  []types.Expression
+	}{
+		// Single escape before the empty multiple escape
+		{`\a||`, []types.Expression{sym("a")}},
+		{`||\a`, []types.Expression{sym("a")}},
+		// Ended by a terminating macro character other than a close paren
+		{`||'a`, []types.Expression{sym(""), types.NewLiteral(sym("A"))}},
+		{`||"a"`, []types.Expression{sym(""), types.NewString("a")}},
+		{`||;c`, []types.Expression{sym("")}},
+		{`||(a)`, []types.Expression{sym(""), types.NewList([]types.Expression{sym("A")})}},
+		// A non-terminating macro character is a constituent inside the token
+		{`||#`, []types.Expression{sym("#")}},
+		{`||a#b`, []types.Expression{sym("A#B")}},
+		{`|| #`, []types.Expression{sym(""), sym("#")}},
+	}
+	r := reader.NewReader()
+	for _, testDef := range testDefs {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+
+		got := []types.Expression{}
+		for {
+			tmp, err := r.Read(i)
+			if !assert.NoError(t, err, "unexpected error for %q", testDef.input) || tmp == nil {
+				break
+			}
+			got = append(got, tmp)
+		}
+		assert.Equal(t, testDef.want, got, "wrong result for %q", testDef.input)
 	}
 }
 
@@ -237,6 +304,20 @@ func TestReaderList(t *testing.T) {
 			expectedItems: []types.Expression{
 				types.NewSymbol("A#B"),
 				types.NewSymbol("C"),
+			},
+		},
+		{
+			input: `(||)`,
+			expectedItems: []types.Expression{
+				types.NewSymbol(""),
+			},
+		},
+		{
+			input: `(a || b)`,
+			expectedItems: []types.Expression{
+				types.NewSymbol("A"),
+				types.NewSymbol(""),
+				types.NewSymbol("B"),
 			},
 		},
 	}
@@ -703,6 +784,8 @@ func TestReaderError(t *testing.T) {
 		{input: `abc\`, wantLine: 1, wantOffset: 4},
 		{input: `(`, wantLine: 1, wantOffset: 1},
 		{input: `(a b`, wantLine: 1, wantOffset: 4},
+		{input: `(||`, wantLine: 1, wantOffset: 3},
+		{input: `(a ||`, wantLine: 1, wantOffset: 5},
 		{input: `(a ;c`, wantLine: 1, wantOffset: 5},
 		{input: `(a #| c |#`, wantLine: 1, wantOffset: 10},
 		{input: `'`, wantLine: 1, wantOffset: 1},
