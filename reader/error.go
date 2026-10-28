@@ -1,11 +1,8 @@
 package reader
 
 import (
-	"errors"
 	"fmt"
 )
-
-var errDivideByZero = errors.New("division by zero")
 
 // ReaderError describes an error caused by unexpected content in the input.
 // Line is the 1-based input line. Offset is the 1-based rune offset within Line.

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/agaffney/glispr/types"
 )
 
 type Reader struct {
@@ -27,18 +29,18 @@ var errSkipped = errors.New("macro produced no expression")
 // readNumberToken parses raw as a number. It returns nil without an error if
 // raw is not a number.
 //
-// parseNumber has no access to the input, so the errors it returns (such as
+// types.ParseNumber has no access to the input, so the errors it returns (such as
 // division by zero) carry no position information. They must be wrapped in a
 // ReaderError here so that callers get the line and offset of the problem.
-func readNumberToken(i *Input, raw string, radix int) (*Number, error) {
-	num, err := parseNumber(raw, radix)
+func readNumberToken(i *Input, raw string, radix int) (*types.Number, error) {
+	num, err := types.ParseNumber(raw, radix)
 	if err != nil {
 		return nil, newReaderError(i, "%v in %q", err, raw)
 	}
 	return num, nil
 }
 
-func (r *Reader) Read(i *Input) (Expression, error) {
+func (r *Reader) Read(i *Input) (types.Expression, error) {
 	for {
 		expr, err := r.readOne(i)
 		if errors.Is(err, errSkipped) {
@@ -50,7 +52,7 @@ func (r *Reader) Read(i *Input) (Expression, error) {
 
 // readRequired reads an expression that must be present, so reaching the end
 // of the input is an error.
-func (r *Reader) readRequired(i *Input) (Expression, error) {
+func (r *Reader) readRequired(i *Input) (types.Expression, error) {
 	expr, err := r.Read(i)
 	if err != nil {
 		return nil, err
@@ -61,7 +63,7 @@ func (r *Reader) readRequired(i *Input) (Expression, error) {
 	return expr, nil
 }
 
-func (r *Reader) readOne(i *Input) (Expression, error) {
+func (r *Reader) readOne(i *Input) (types.Expression, error) {
 	tokenBuf := bytes.NewBuffer(nil)
 	tokenEscaped := make([]bool, 0)
 	multipleEscape := false
@@ -86,9 +88,7 @@ func (r *Reader) readOne(i *Input) (Expression, error) {
 						return tmpNum, nil
 					}
 				}
-				return &Symbol{
-					name: r.caseConvert(rawToken, tokenEscaped),
-				}, nil
+				return types.NewSymbol(r.caseConvert(rawToken, tokenEscaped)), nil
 			}
 			return nil, err
 		}
@@ -115,9 +115,7 @@ func (r *Reader) readOne(i *Input) (Expression, error) {
 						return tmpNum, nil
 					}
 				}
-				return &Symbol{
-					name: r.caseConvert(rawToken, tokenEscaped),
-				}, nil
+				return types.NewSymbol(r.caseConvert(rawToken, tokenEscaped)), nil
 			}
 			continue
 		case ReadtableSyntaxTypeMacroTerminating, ReadtableSyntaxTypeMacroNonTerminating:
@@ -141,9 +139,7 @@ func (r *Reader) readOne(i *Input) (Expression, error) {
 						return tmpNum, nil
 					}
 				}
-				return &Symbol{
-					name: r.caseConvert(rawToken, tokenEscaped),
-				}, nil
+				return types.NewSymbol(r.caseConvert(rawToken, tokenEscaped)), nil
 			}
 			fn, ok := r.rt.MacroFuncs[ch]
 			if !ok {
@@ -185,7 +181,7 @@ func (r *Reader) readOne(i *Input) (Expression, error) {
 	}
 }
 
-func readString(r *Reader, i *Input, initialChar rune) (Expression, error) {
+func readString(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
 	buf := bytes.NewBuffer(nil)
 	var escape bool
 	var ch rune
@@ -206,9 +202,7 @@ func readString(r *Reader, i *Input, initialChar rune) (Expression, error) {
 				continue
 			}
 			if ch == initialChar {
-				return &String{
-					val: buf.String(),
-				}, nil
+				return types.NewString(buf.String()), nil
 			}
 		}
 		_, _ = buf.WriteRune(ch)
@@ -216,26 +210,24 @@ func readString(r *Reader, i *Input, initialChar rune) (Expression, error) {
 	}
 }
 
-func readLiteral(r *Reader, i *Input, initialChar rune) (Expression, error) {
+func readLiteral(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
 	item, err := r.readRequired(i)
 	if err != nil {
 		return nil, err
 	}
-	return &Literal{
-		item: item,
-	}, nil
+	return types.NewLiteral(item), nil
 }
 
-func readCloseParen(r *Reader, i *Input, initialChar rune) (Expression, error) {
+func readCloseParen(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
 	return nil, newReaderError(i, "unmatched close parenthesis")
 }
 
-func readDispatch(r *Reader, i *Input, initialChar rune) (Expression, error) {
+func readDispatch(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
 	// initialChar is '#'; the next rune is the dispatch character.
 	dispatch, _, err := i.ReadRune()
 	if err != nil {
 		if errors.Is(err, io.EOF) {
-			return &Symbol{name: "#"}, nil
+			return types.NewSymbol("#"), nil
 		}
 		return nil, err
 	}
@@ -304,7 +296,7 @@ func readBlockComment(r *Reader, i *Input) error {
 // readDispatchRadixNumber reads and parses a radix-prefixed number (#b, #o, #x,
 // or #<digits>r<number>) after the initial '#' and dispatch character have
 // been consumed. It returns the parsed number or nil, and an optional error
-func readDispatchRadixNumber(r *Reader, i *Input, dispatch rune) (Expression, error) {
+func readDispatchRadixNumber(r *Reader, i *Input, dispatch rune) (types.Expression, error) {
 	radix := 10
 	var radixDigits []rune
 
@@ -391,9 +383,9 @@ func readDispatchRadixNumber(r *Reader, i *Input, dispatch rune) (Expression, er
 	return nil, newReaderError(i, "invalid number %q for radix %d", numDigits.String(), radix)
 }
 
-func readList(r *Reader, i *Input, initialChar rune) (Expression, error) {
-	items := []Expression{}
-	var item Expression
+func readList(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
+	items := []types.Expression{}
+	var item types.Expression
 	var ch rune
 	var err error
 	for {
@@ -422,12 +414,10 @@ func readList(r *Reader, i *Input, initialChar rune) (Expression, error) {
 		}
 		items = append(items, item)
 	}
-	return &List{
-		items: items,
-	}, nil
+	return types.NewList(items), nil
 }
 
-func readComment(r *Reader, i *Input, initialChar rune) (Expression, error) {
+func readComment(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
 	buf := bytes.NewBuffer(nil)
 	_, _ = buf.WriteRune(initialChar)
 	var ch rune
