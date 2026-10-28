@@ -45,7 +45,7 @@ func TestTokenAdd(t *testing.T) {
 	tok.add('1', true)
 	tok.add('e', false)
 
-	assert.Equal(t, 4, tok.len())
+	assert.Equal(t, 4, len(tok.chars))
 	assert.Equal(t, "..1e", tok.String())
 	assert.Equal(t, []tokenChar{
 		{r: '.', escaped: false, traits: traitAlphabetic | traitDot | traitDecimalPoint},
@@ -70,4 +70,17 @@ func TestTokenHasEscape(t *testing.T) {
 	assert.False(t, empty.hasEscape())
 	empty.sawEscape = true
 	assert.True(t, empty.hasEscape())
+}
+
+func TestTokenStarted(t *testing.T) {
+	tok := &token{}
+	assert.False(t, tok.started())
+
+	// An empty multiple escape starts a token without adding characters
+	tok.sawEscape = true
+	assert.True(t, tok.started())
+
+	tok = &token{}
+	tok.add('a', false)
+	assert.True(t, tok.started())
 }
