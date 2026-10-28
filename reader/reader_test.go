@@ -254,8 +254,8 @@ func TestReaderList(t *testing.T) {
 			t.Errorf("unexpected error: %s", err)
 			continue
 		}
-		assert.IsType(t, &types.List{}, tmp, "did not get expected expression type for input: %s", testDef.input)
-		tmpItems := tmp.(*types.List).Items()
+		tmpItems, ok := types.ListItems(tmp)
+		assert.True(t, ok, "did not get a proper list for input: %s", testDef.input)
 		assert.Equal(t, testDef.expectedItems, tmpItems, "list items does not match expected value for input: %s", testDef.input)
 	}
 }
@@ -487,9 +487,7 @@ func TestReaderCloseParen(t *testing.T) {
 
 		tmp, err := r.Read(i)
 		assert.NoError(t, err)
-		assert.IsType(t, &types.List{}, tmp)
-		list := tmp.(*types.List)
-		assert.Empty(t, list.Items())
+		assert.Same(t, types.Nil, tmp)
 	})
 
 	t.Run("list with whitespace before close parenthesis", func(t *testing.T) {
@@ -509,14 +507,14 @@ func TestReaderCloseParen(t *testing.T) {
 
 				tmp, err := r.Read(i)
 				assert.NoError(t, err)
-				assert.IsType(t, &types.List{}, tmp)
-				list := tmp.(*types.List)
+				items, ok := types.ListItems(tmp)
+				assert.True(t, ok)
 
 				if tc.itemName == "" {
-					assert.Empty(t, list.Items())
+					assert.Same(t, types.Nil, tmp)
 				} else {
-					assert.Len(t, list.Items(), 1)
-					sym, ok := list.Items()[0].(*types.Symbol)
+					assert.Len(t, items, 1)
+					sym, ok := items[0].(*types.Symbol)
 					assert.True(t, ok)
 					assert.Equal(t, tc.itemName, sym.Name())
 				}
@@ -742,4 +740,21 @@ func TestReaderError(t *testing.T) {
 		assert.Equal(t, testDef.wantLine, readerErr.Line, "wrong line for %q", testDef.input)
 		assert.Equal(t, testDef.wantOffset, readerErr.Offset, "wrong offset for %q", testDef.input)
 	}
+}
+
+// Dotted pair syntax is not supported yet: the "." is read as an ordinary
+// symbol, so "(a . b)" is a proper three element list.
+//
+// TODO: remove this test, or replace it with one expecting a dotted pair, once
+// the reader supports dotted pair syntax. It is expected to fail at that point.
+func TestReaderDottedPairNotSupported(t *testing.T) {
+	r := reader.NewReader()
+	i, err := reader.NewInput(strings.NewReader("(a . b)"))
+	assert.NoError(t, err)
+
+	tmp, err := r.Read(i)
+	assert.NoError(t, err)
+	items, ok := types.ListItems(tmp)
+	assert.True(t, ok)
+	assert.Len(t, items, 3)
 }
