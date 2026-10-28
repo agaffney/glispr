@@ -26,14 +26,15 @@ func NewReader() *Reader {
 // input without producing an expression.
 var errSkipped = errors.New("macro produced no expression")
 
-// readNumberToken parses raw as a number. It returns nil without an error if
-// raw is not a number.
+// readNumberToken parses raw as a number, using parse. It returns nil without
+// an error if raw is not a number.
 //
-// types.ParseNumber has no access to the input, so the errors it returns (such as
-// division by zero) carry no position information. They must be wrapped in a
-// ReaderError here so that callers get the line and offset of the problem.
-func readNumberToken(i *Input, raw string, radix int) (*types.Number, error) {
-	num, err := types.ParseNumber(raw, radix)
+// The parse functions in types have no access to the input, so the errors they
+// return (such as division by zero) carry no position information. They must be
+// wrapped in a ReaderError here so that callers get the line and offset of the
+// problem.
+func readNumberToken(i *Input, raw string, radix int, parse func(string, int) (*types.Number, error)) (*types.Number, error) {
+	num, err := parse(raw, radix)
 	if err != nil {
 		return nil, newReaderError(i, "%v in %q", err, raw)
 	}
@@ -61,7 +62,7 @@ func (r *Reader) finishToken(i *Input, tok *token) (readResult, error) {
 		return readResult{}, newReaderError(i, "token consists only of dots: %q", tok.String())
 	}
 	if !tok.hasEscape() {
-		tmpNum, err := readNumberToken(i, tok.String(), 10)
+		tmpNum, err := readNumberToken(i, tok.String(), 10, types.ParseNumber)
 		if err != nil {
 			return readResult{}, err
 		}
@@ -371,7 +372,8 @@ func readDispatchRadixNumber(r *Reader, i *Input, dispatch rune) (types.Expressi
 		numDigits.WriteRune(next)
 	}
 
-	tmpNum, err := readNumberToken(i, numDigits.String(), radix)
+	// Only integers and ratios are allowed, not floats
+	tmpNum, err := readNumberToken(i, numDigits.String(), radix, types.ParseRational)
 	if err != nil {
 		return nil, err
 	}
