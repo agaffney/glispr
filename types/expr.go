@@ -108,7 +108,18 @@ func (c *Cons) String() string {
 // The returned list does not share storage with items. It panics if any item
 // is nil, as NewCons does.
 func NewList(items []Expression) Expression {
-	ret := Nil
+	return NewListTail(items, Nil)
+}
+
+// NewListTail builds a list of items whose final cdr is tail. The result is
+// dotted unless tail is Nil or itself a proper list, in which case the result
+// is a proper list, so (a . (b c)) is (a b c). With no items it returns tail
+// itself. It panics if tail or any item is nil, as NewCons does.
+func NewListTail(items []Expression, tail Expression) Expression {
+	if tail == nil || isNilCons(tail) {
+		panic("types: NewListTail called with nil tail")
+	}
+	ret := tail
 	for _, item := range slices.Backward(items) {
 		ret = NewCons(item, ret)
 	}
