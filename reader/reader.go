@@ -14,11 +14,17 @@ import (
 
 type Reader struct {
 	rt Readtable
+	// DefaultFloatFormat is the format of floats with no exponent marker or the
+	// marker e. It is the equivalent of *read-default-float-format*, and must be
+	// types.FloatFormatSingle or types.FloatFormatDouble: reading such a float
+	// with any other value is an error.
+	DefaultFloatFormat types.FloatFormat
 }
 
 func NewReader() *Reader {
 	return &Reader{
-		rt: StandardReadtable,
+		rt:                 StandardReadtable,
+		DefaultFloatFormat: types.FloatFormatSingle,
 	}
 }
 
@@ -62,7 +68,9 @@ func (r *Reader) finishToken(i *Input, tok *token) (readResult, error) {
 		return readResult{}, newReaderError(i, "token consists only of dots: %q", tok.String())
 	}
 	if !tok.hasEscape() {
-		tmpNum, err := readNumberToken(i, tok.String(), 10, types.ParseNumber)
+		tmpNum, err := readNumberToken(i, tok.String(), 10, func(val string, radix int) (*types.Number, error) {
+			return types.ParseNumber(val, radix, r.DefaultFloatFormat)
+		})
 		if err != nil {
 			return readResult{}, err
 		}
