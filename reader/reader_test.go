@@ -186,6 +186,27 @@ func TestReaderSymbol(t *testing.T) {
 			input:        `foo#`,
 			expectedName: `FOO#`,
 		},
+		// Printable non-ASCII characters are constituents
+		{
+			input:        `→`,
+			expectedName: `→`,
+		},
+		{
+			input:        `a→b`,
+			expectedName: `A→B`,
+		},
+		{
+			input:        `✓ok`,
+			expectedName: `✓OK`,
+		},
+		{
+			input:        `λ😀`,
+			expectedName: `Λ😀`,
+		},
+		{
+			input:        `|a→b|`,
+			expectedName: `a→b`,
+		},
 		// An empty multiple escape is a symbol with an empty name
 		{
 			input:        `||`,
@@ -271,6 +292,103 @@ func TestReaderEmptyMultipleEscapeTerminators(t *testing.T) {
 			got = append(got, tmp)
 		}
 		assert.Equal(t, testDef.want, got, "wrong result for %q", testDef.input)
+	}
+}
+
+func TestReaderInvalidCharacter(t *testing.T) {
+	inputs := []string{
+		"\x00",
+		"a\x01b",
+		"(a \x1b)",
+		"|a\x01b|",
+		// Invisible characters and non-ASCII spaces, including in the middle of a token
+		"\u200b",
+		"a\u200bb",
+		"(a\u3000b)",
+		"a\u00a0b",
+	}
+	r := reader.NewReader()
+	for _, input := range inputs {
+		i, err := reader.NewInput(strings.NewReader(input))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		assert.ErrorContains(t, err, "invalid character", "input: %q", input)
+		assert.Nil(t, tmp, "input: %q", input)
+	}
+
+	// A single escape takes the next character as is, so it can escape an
+	// invalid character, which then only has the alphabetic trait
+	i, err := reader.NewInput(strings.NewReader("a\\\x01b"))
+	assert.NoError(t, err)
+	tmp, err := r.Read(i)
+	assert.NoError(t, err)
+	assert.Equal(t, types.NewSymbol("A\x01B"), tmp)
+}
+
+func TestReaderMalformedUTF8(t *testing.T) {
+	testDefs := []struct {
+		input      string
+		wantLine   int
+		wantOffset int
+	}{
+		{"\xff", 1, 1},
+		{"abc\xff", 1, 4},
+		{"(a \xc3", 1, 4},
+		{"\"a\xffb\"", 1, 3},
+		{"; comment \xff\n", 1, 11},
+		{"|a\xffb|", 1, 3},
+		{"a\n\xff", 2, 1},
+	}
+	r := reader.NewReader()
+	for _, testDef := range testDefs {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+
+		// Skip over any complete expressions before the bad byte
+		var readErr error
+		for {
+			tmp, err := r.Read(i)
+			if err != nil || tmp == nil {
+				readErr = err
+				break
+			}
+		}
+		var readerErr reader.ReaderError
+		if !assert.True(t, errors.As(readErr, &readerErr), "expected ReaderError for %q", testDef.input) {
+			continue
+		}
+		assert.ErrorContains(t, readErr, "invalid UTF-8", "input: %q", testDef.input)
+		assert.Equal(t, testDef.wantLine, readerErr.Line, "wrong line for %q", testDef.input)
+		assert.Equal(t, testDef.wantOffset, readerErr.Offset, "wrong offset for %q", testDef.input)
+	}
+}
+
+// Characters that are valid in the input but unusual, which are accepted
+func TestReaderUnusualCharacters(t *testing.T) {
+	sym := types.NewSymbol
+	testDefs := []struct {
+		input string
+		want  types.Expression
+	}{
+		// A real U+FFFD is not malformed UTF-8
+		{"\ufffd", sym("\ufffd")},
+		{"a\ufffdb", sym("A\ufffdB")},
+		// Zero-width joiner emoji sequence and non-joiner
+		{"\U0001F468\u200d\U0001F469\u200d\U0001F467", sym("\U0001F468\u200d\U0001F469\u200d\U0001F467")},
+		{"a\u200cb", sym("A\u200cB")},
+		// Control characters are allowed in strings and comments
+		{"\"a\x01b\"", types.NewString("a\x01b")},
+		{"; \x01\nfoo", sym("FOO")},
+	}
+	r := reader.NewReader()
+	for _, testDef := range testDefs {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		assert.NoError(t, err, "unexpected error for %q", testDef.input)
+		assert.Equal(t, testDef.want, tmp, "wrong result for %q", testDef.input)
 	}
 }
 

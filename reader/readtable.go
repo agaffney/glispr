@@ -65,12 +65,14 @@ var StandardReadtable = Readtable{
 		case '|':
 			return ReadtableSyntaxTypeMultipleEscape
 		default:
-			// digits
-			if ch >= '0' && ch <= '9' {
-				return ReadtableSyntaxTypeConstituent
-			}
-			// letters
-			if unicode.IsLetter(ch) {
+			// Any other printable character, such as digits, letters, and
+			// non-ASCII symbols, is a constituent, as are the zero-width joiner
+			// and non-joiner that emoji sequences and some scripts need.
+			//
+			// Other invisible characters and non-ASCII spaces are invalid on
+			// purpose, so they can't silently end up in a symbol name. What is
+			// printable depends on the Unicode version of the Go toolchain.
+			if unicode.IsPrint(ch) || ch == '\u200c' || ch == '\u200d' {
 				return ReadtableSyntaxTypeConstituent
 			}
 		}
