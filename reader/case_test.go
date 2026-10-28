@@ -22,6 +22,11 @@ func TestReaderCaseUpcaseEscapes(t *testing.T) {
 		{input: `|FrobBoz|`, want: `FrobBoz`},
 		{input: `\frobboz`, want: `fROBBOZ`},
 		{input: `foo\bar`, want: `FOObAR`},
+		// Escaped and unescaped parts in the same token
+		{input: `|a|b`, want: `aB`},
+		{input: `a|b|c`, want: `AbC`},
+		{input: `a\bc`, want: `AbC`},
+		{input: `a\Bc`, want: `ABC`},
 	}
 	for _, tc := range testCases {
 		i, err := NewInput(strings.NewReader(tc.input))
@@ -47,6 +52,8 @@ func TestReaderCaseDowncase(t *testing.T) {
 		{input: `frobboz`, want: `frobboz`},
 		{input: `|FrobBoz|`, want: `FrobBoz`},
 		{input: `\Frobboz`, want: `Frobboz`},
+		{input: `A\Bc`, want: `aBc`},
+		{input: `|A|B`, want: `Ab`},
 	}
 	for _, tc := range testCases {
 		i, err := NewInput(strings.NewReader(tc.input))
@@ -73,6 +80,12 @@ func TestReaderCaseInvert(t *testing.T) {
 		{input: `FooBar`, want: `FooBar`},
 		{input: `|FooBar|`, want: `FooBar`},
 		{input: `\foobar`, want: `fOOBAR`},
+		// Only unescaped letters decide whether to invert, escaped ones are kept
+		{input: `\Foo`, want: `FOO`},
+		{input: `|a|B`, want: `ab`},
+		{input: `a\Bc`, want: `ABC`},
+		{input: `A\bC`, want: `abc`},
+		{input: `Fo\O`, want: `FoO`},
 	}
 	for _, tc := range testCases {
 		i, err := NewInput(strings.NewReader(tc.input))

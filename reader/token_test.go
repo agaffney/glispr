@@ -1,0 +1,73 @@
+package reader
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestConstituentTraits(t *testing.T) {
+	testCases := []struct {
+		r    rune
+		want traitSet
+	}{
+		{'a', traitAlphabetic | traitDigit},
+		{'Z', traitAlphabetic | traitDigit},
+		{'e', traitAlphabetic | traitDigit | traitExponentMarker},
+		{'D', traitAlphabetic | traitDigit | traitExponentMarker},
+		{'0', traitAlphabetic | traitDigit},
+		{'9', traitAlphabetic | traitDigit},
+		{'+', traitAlphabetic | traitPlusSign},
+		{'-', traitAlphabetic | traitMinusSign},
+		{'.', traitAlphabetic | traitDot | traitDecimalPoint},
+		{'/', traitAlphabetic | traitRatioMarker},
+		{':', traitPackageMarker},
+		{'!', traitAlphabetic},
+		{'~', traitAlphabetic},
+		{'é', traitAlphabetic},
+		{'\b', traitInvalid},
+		{0x7f, traitInvalid},
+		{' ', traitInvalid},
+		{'\n', traitInvalid},
+		{'\t', traitInvalid},
+		{'\r', traitInvalid},
+		{'\f', traitInvalid},
+	}
+	for _, tc := range testCases {
+		assert.Equal(t, tc.want, constituentTraits(tc.r), "wrong traits for %q", tc.r)
+	}
+}
+
+func TestTokenAdd(t *testing.T) {
+	tok := &token{}
+	tok.add('.', false)
+	tok.add('.', true)
+	tok.add('1', true)
+	tok.add('e', false)
+
+	assert.Equal(t, 4, tok.len())
+	assert.Equal(t, "..1e", tok.String())
+	assert.Equal(t, []tokenChar{
+		{r: '.', escaped: false, traits: traitAlphabetic | traitDot | traitDecimalPoint},
+		// Escaped characters only have the alphabetic trait
+		{r: '.', escaped: true, traits: traitAlphabetic},
+		{r: '1', escaped: true, traits: traitAlphabetic},
+		{r: 'e', escaped: false, traits: traitAlphabetic | traitDigit | traitExponentMarker},
+	}, tok.chars)
+}
+
+func TestTokenHasEscape(t *testing.T) {
+	tok := &token{}
+	tok.add('a', false)
+	assert.False(t, tok.hasEscape())
+
+	// Adding an escaped character records the escape
+	tok.add('b', true)
+	assert.True(t, tok.hasEscape())
+
+	// An escape counts even if it contributed no characters
+	empty := &token{}
+	assert.False(t, empty.hasEscape())
+	empty.sawEscape = true
+	assert.True(t, empty.hasEscape())
+}
