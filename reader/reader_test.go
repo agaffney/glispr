@@ -274,6 +274,56 @@ func TestReaderEmptyMultipleEscapeTerminators(t *testing.T) {
 	}
 }
 
+func TestReaderRubout(t *testing.T) {
+	sym := types.NewSymbol
+	testDefs := []struct {
+		input string
+		want  []types.Expression
+	}{
+		// Rubout separates tokens and is skipped between them
+		{"a\x7fb", []types.Expression{sym("A"), sym("B")}},
+		{"\x7fa\x7f", []types.Expression{sym("A")}},
+		{"\x7f\x7f", []types.Expression{}},
+		{"1\x7f2", []types.Expression{
+			types.NewNumberInteger(big.NewInt(1)),
+			types.NewNumberInteger(big.NewInt(2)),
+		}},
+		{"(a\x7fb)", []types.Expression{
+			types.NewList([]types.Expression{sym("A"), sym("B")}),
+		}},
+		{"( \x7f)", []types.Expression{types.Nil}},
+		{"(a\x7f)", []types.Expression{types.NewList([]types.Expression{sym("A")})}},
+		{"'\x7fa", []types.Expression{types.NewLiteral(sym("A"))}},
+		{"(\x7f(\x7f)\x7f)", []types.Expression{
+			types.NewList([]types.Expression{types.Nil}),
+		}},
+		// Escaped, or inside a multiple escape, it is part of the token
+		{"a\\\x7fb", []types.Expression{sym("A\x7fB")}},
+		{"|a\x7fb|", []types.Expression{sym("a\x7fb")}},
+	}
+	r := reader.NewReader()
+	for _, testDef := range testDefs {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+
+		var got []types.Expression
+		for {
+			tmp, err := r.Read(i)
+			if !assert.NoError(t, err, "unexpected error for %q", testDef.input) || tmp == nil {
+				break
+			}
+			got = append(got, tmp)
+		}
+		// Compare lengths and elements so that nil and empty slices don't matter
+		if !assert.Len(t, got, len(testDef.want), "wrong number of results for %q", testDef.input) {
+			continue
+		}
+		for k := range testDef.want {
+			assert.Equal(t, testDef.want[k], got[k], "wrong result %d for %q", k, testDef.input)
+		}
+	}
+}
+
 func TestReaderList(t *testing.T) {
 	testDefs := []struct {
 		input         string

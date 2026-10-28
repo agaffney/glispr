@@ -43,11 +43,11 @@ var StandardReadtable = Readtable{
 	CaseMode: ReadtableCaseModeUpcase,
 	SyntaxTypeFunc: func(ch rune) ReadtableSyntaxType {
 		switch ch {
-		// backspace and delete
-		case rune(8), rune(127):
+		// backspace
+		case rune(8):
 			return ReadtableSyntaxTypeConstituent
-		// whitespace
-		case '\t', '\n', '\r', '\f', ' ':
+		// whitespace, including rubout (delete)
+		case '\t', '\n', '\r', '\f', ' ', rune(127):
 			return ReadtableSyntaxTypeWhitespace
 		// special characters
 		case '!', '$', '%', '&', '*', '+', '-', '.', '/', ':', '<', '=', '>', '?', '@', '[', ']', '^', '_', '{', '}', '~':
