@@ -671,6 +671,18 @@ func TestReaderBlockComment(t *testing.T) {
 	})
 }
 
+func TestReaderEndOfInput(t *testing.T) {
+	// Reaching the end of the input between expressions is not an error
+	for _, input := range []string{"", " ", "\n\n", "; comment", "#| comment |#", " #| a |# ; b"} {
+		i, err := reader.NewInput(strings.NewReader(input))
+		assert.NoError(t, err)
+
+		tmp, err := reader.NewReader().Read(i)
+		assert.NoError(t, err, "input: %q", input)
+		assert.Nil(t, tmp, "input: %q", input)
+	}
+}
+
 func TestReaderError(t *testing.T) {
 	testDefs := []struct {
 		input      string
@@ -685,6 +697,28 @@ func TestReaderError(t *testing.T) {
 		{input: "\n1/0\n", wantLine: 2, wantOffset: 3},
 		// Unreading the first character of a line must stay on that line
 		{input: "(\n1/0)", wantLine: 2, wantOffset: 3},
+		// Unexpected end of file
+		{input: `"abc`, wantLine: 1, wantOffset: 4},
+		{input: `"abc\`, wantLine: 1, wantOffset: 5},
+		{input: `|abc`, wantLine: 1, wantOffset: 4},
+		{input: `abc\`, wantLine: 1, wantOffset: 4},
+		{input: `(`, wantLine: 1, wantOffset: 1},
+		{input: `(a b`, wantLine: 1, wantOffset: 4},
+		{input: `(a ;c`, wantLine: 1, wantOffset: 5},
+		{input: `(a #| c |#`, wantLine: 1, wantOffset: 10},
+		{input: `'`, wantLine: 1, wantOffset: 1},
+		{input: `(a '`, wantLine: 1, wantOffset: 4},
+		{input: `' ;c`, wantLine: 1, wantOffset: 4},
+		{input: `''`, wantLine: 1, wantOffset: 2},
+		// Offsets stay 1-based across newlines, including when EOF follows one
+		{input: "(a\n", wantLine: 2, wantOffset: 1},
+		{input: "(a\n b", wantLine: 2, wantOffset: 2},
+		{input: "\"abc\n", wantLine: 2, wantOffset: 1},
+		{input: "\"a\nbc", wantLine: 2, wantOffset: 2},
+		{input: "|abc\n", wantLine: 2, wantOffset: 1},
+		{input: "|a\nbc", wantLine: 2, wantOffset: 2},
+		{input: "'\n", wantLine: 2, wantOffset: 1},
+		{input: "(a\n\n'\n", wantLine: 4, wantOffset: 1},
 		{input: "#p", wantLine: 1, wantOffset: 2},
 		{input: "\n#p", wantLine: 2, wantOffset: 2},
 		{input: "#1r0", wantLine: 1, wantOffset: 3},
