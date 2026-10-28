@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"unicode/utf8"
 )
 
 type Input struct {
@@ -31,6 +32,11 @@ func (i *Input) ReadRune() (rune, int, error) {
 	}
 	// Increment line position
 	i.linePos++
+	// A malformed byte reads as RuneError with a size of 1, while a real U+FFFD
+	// is three bytes long
+	if c == utf8.RuneError && size == 1 {
+		return 0, size, newReaderError(i, "invalid UTF-8 encoding in input")
+	}
 	// Check for newline
 	if c == '\n' {
 		i.line++
