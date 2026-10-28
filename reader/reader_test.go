@@ -605,8 +605,9 @@ func TestReaderNumber(t *testing.T) {
 			expectedNum: types.NewNumberRatio(big.NewRat(-30517578125, 32768)),
 		},
 		{
+			// A ratio equal to a whole number is an integer
 			input:       `10/5`,
-			expectedNum: types.NewNumberRatio(big.NewRat(10, 5)),
+			expectedNum: types.NewNumberInteger(big.NewInt(2)),
 		},
 		{
 			input:       `0.0`,
@@ -795,7 +796,13 @@ func TestReaderDispatchRadix(t *testing.T) {
 		{input: `#3r120/21`, expectedNum: types.NewNumberRatio(big.NewRat(15, 7))},
 		{input: `#Xbc/ad`, expectedNum: types.NewNumberRatio(big.NewRat(188, 173))},
 		{input: `#xFADED/FACADE`, expectedNum: types.NewNumberRatio(big.NewRat(1027565, 16435934))},
-		{input: `#xFF.`, expectedNum: types.NewNumberInteger(big.NewInt(255))},
+		// A trailing decimal point makes a decimal integer in any radix
+		{input: `#x10.`, expectedNum: types.NewNumberInteger(big.NewInt(10))},
+		{input: `#b10.`, expectedNum: types.NewNumberInteger(big.NewInt(10))},
+		{input: `#16r-10.`, expectedNum: types.NewNumberInteger(big.NewInt(-10))},
+		// A ratio equal to a whole number is an integer
+		{input: `#x4/2`, expectedNum: types.NewNumberInteger(big.NewInt(2))},
+		{input: `#b110/11`, expectedNum: types.NewNumberInteger(big.NewInt(2))},
 	}
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(strings.NewReader(testDef.input))
@@ -850,7 +857,7 @@ func TestReaderDispatchRadix(t *testing.T) {
 	})
 
 	t.Run("malformed radix numbers error", func(t *testing.T) {
-		inputs := []string{"#xz", "#2rabc", "#x", "#2r", "#2r ", "#xF.F", "#1r0", "#37r0", "#999999999999999999999999r0", "#x1/0", "#2r-1/0"}
+		inputs := []string{"#xz", "#2rabc", "#x", "#2r", "#2r ", "#xF.F", "#xFF.", "#x1.5", "#10r1.5", "#10r1e5", "#xF/F.", "#1r0", "#37r0", "#999999999999999999999999r0", "#x1/0", "#2r-1/0"}
 		for _, input := range inputs {
 			i, err := reader.NewInput(strings.NewReader(input))
 			assert.NoError(t, err)
@@ -985,6 +992,10 @@ func TestReaderError(t *testing.T) {
 		{input: "(a . b . c)", wantLine: 1, wantOffset: 8},
 		{input: "(a ..)", wantLine: 1, wantOffset: 5},
 		{input: "(a\n.)", wantLine: 2, wantOffset: 2},
+		// Floats out of range are errors, not symbols
+		{input: "1e999999999", wantLine: 1, wantOffset: 11},
+		{input: "(1e-999999999 a)", wantLine: 1, wantOffset: 13},
+		{input: "1e99999999999999999999", wantLine: 1, wantOffset: 22},
 		{input: "#p", wantLine: 1, wantOffset: 2},
 		{input: "\n#p", wantLine: 2, wantOffset: 2},
 		{input: "#1r0", wantLine: 1, wantOffset: 3},
