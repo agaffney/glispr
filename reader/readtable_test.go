@@ -13,15 +13,18 @@ func TestStandardReadtable(t *testing.T) {
 	expectedSyntaxTypes := map[rune]reader.ReadtableSyntaxType{
 		' ':  reader.ReadtableSyntaxTypeWhitespace,
 		'\f': reader.ReadtableSyntaxTypeWhitespace,
-		'3':  reader.ReadtableSyntaxTypeConstituent,
-		'd':  reader.ReadtableSyntaxTypeConstituent,
-		'D':  reader.ReadtableSyntaxTypeConstituent,
-		'λ':  reader.ReadtableSyntaxTypeConstituent,
-		'#':  reader.ReadtableSyntaxTypeMacroNonTerminating,
-		')':  reader.ReadtableSyntaxTypeMacroTerminating,
-		'†':  reader.ReadtableSyntaxTypeInvalid,
-		'\\': reader.ReadtableSyntaxTypeSingleEscape,
-		'|':  reader.ReadtableSyntaxTypeMultipleEscape,
+		// Rubout is whitespace, but backspace is a constituent
+		'\x7f': reader.ReadtableSyntaxTypeWhitespace,
+		'\b':   reader.ReadtableSyntaxTypeConstituent,
+		'3':    reader.ReadtableSyntaxTypeConstituent,
+		'd':    reader.ReadtableSyntaxTypeConstituent,
+		'D':    reader.ReadtableSyntaxTypeConstituent,
+		'λ':    reader.ReadtableSyntaxTypeConstituent,
+		'#':    reader.ReadtableSyntaxTypeMacroNonTerminating,
+		')':    reader.ReadtableSyntaxTypeMacroTerminating,
+		'†':    reader.ReadtableSyntaxTypeInvalid,
+		'\\':   reader.ReadtableSyntaxTypeSingleEscape,
+		'|':    reader.ReadtableSyntaxTypeMultipleEscape,
 	}
 	for k, v := range expectedSyntaxTypes {
 		st := rt.SyntaxTypeFunc(k)

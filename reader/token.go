@@ -26,10 +26,11 @@ const (
 // CLHS figure 2-7. Characters the standard doesn't mention are alphabetic.
 func constituentTraits(r rune) traitSet {
 	switch {
-	case r == '\b' || r == 0x7f:
+	case r == '\b':
 		return traitInvalid
-	case r == '\t' || r == '\n' || r == '\f' || r == '\r' || r == ' ':
-		// Only constituents if the readtable makes them so, and then invalid
+	case r == '\t' || r == '\n' || r == '\f' || r == '\r' || r == ' ' || r == 0x7f:
+		// Whitespace in the standard readtable, so only constituents if a
+		// readtable makes them so, and then invalid
 		return traitInvalid
 	case r >= '0' && r <= '9':
 		return traitAlphabetic | traitDigit
