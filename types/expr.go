@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"slices"
+	"strings"
 )
 
 type Expression interface {
@@ -15,39 +16,127 @@ type ExpressionType int
 
 const (
 	ExpressionTypeNone ExpressionType = iota
-	ExpressionTypeList
+	ExpressionTypeNull
+	ExpressionTypeCons
 	ExpressionTypeLiteral
 	ExpressionTypeString
 	ExpressionTypeNumber
 	ExpressionTypeSymbol
 )
 
-type List struct {
-	items []Expression
+// null is the type of the empty list. It is unexported so that Nil is the only
+// instance and external code can't construct a second "empty list" that would
+// be mistaken for Nil. Compare against Nil or check Type() to detect it.
+type null struct{}
+
+// Nil is the empty list. It must be treated as read-only: reassigning it would
+// break every comparison against it, including ListItems.
+var Nil Expression = &null{}
+
+func (*null) Type() ExpressionType { return ExpressionTypeNull }
+
+func (*null) String() string { return "()" }
+
+type Cons struct {
+	car Expression
+	cdr Expression
 }
 
-func NewList(items []Expression) *List {
-	return &List{
-		items: slices.Clone(items),
+// isNilCons reports whether expr holds a nil *Cons, which is not == nil when
+// stored in an Expression.
+func isNilCons(expr Expression) bool {
+	c, ok := expr.(*Cons)
+	return ok && c == nil
+}
+
+// NewCons builds a cons cell. It panics if car or cdr is nil, including a nil
+// *Cons stored in an Expression.
+func NewCons(car, cdr Expression) *Cons {
+	if car == nil || cdr == nil || isNilCons(car) || isNilCons(cdr) {
+		panic("types: NewCons called with nil car or cdr")
+	}
+	return &Cons{
+		car: car,
+		cdr: cdr,
 	}
 }
 
-func (List) Type() ExpressionType { return ExpressionTypeList }
+func (*Cons) Type() ExpressionType { return ExpressionTypeCons }
 
-func (l List) String() string {
-	ret := `(`
-	for i, item := range l.items {
-		ret += item.String()
-		if i < len(l.items)-1 {
-			ret += ` `
+// Car returns the first element of the cell. It panics on a nil *Cons.
+func (c *Cons) Car() Expression {
+	if c == nil {
+		panic("types: Car called on nil *Cons")
+	}
+	return c.car
+}
+
+// Cdr returns the rest of the cell. It panics on a nil *Cons.
+func (c *Cons) Cdr() Expression {
+	if c == nil {
+		panic("types: Cdr called on nil *Cons")
+	}
+	return c.cdr
+}
+
+func (c *Cons) String() string {
+	if c == nil {
+		return "<nil>"
+	}
+	var sb strings.Builder
+	sb.WriteString(`(`)
+	sb.WriteString(c.car.String())
+	rest := c.cdr
+	for {
+		next, ok := rest.(*Cons)
+		if !ok {
+			break
 		}
+		sb.WriteString(` `)
+		sb.WriteString(next.car.String())
+		rest = next.cdr
 	}
-	ret += `)`
+	if rest != Nil {
+		sb.WriteString(` . `)
+		sb.WriteString(rest.String())
+	}
+	sb.WriteString(`)`)
+	return sb.String()
+}
+
+// NewList builds a proper list from items. It returns Nil if there are none.
+// The returned list does not share storage with items. It panics if any item
+// is nil, as NewCons does.
+func NewList(items []Expression) Expression {
+	ret := Nil
+	for _, item := range slices.Backward(items) {
+		ret = NewCons(item, ret)
+	}
 	return ret
 }
 
-func (l List) Items() []Expression {
-	return slices.Clone(l.items)
+// ListItems returns the elements of a proper list, or an empty non-nil slice
+// for Nil. The bool is false (and the slice nil) if expr is not a proper list,
+// meaning it is neither Nil nor a chain of conses ending in Nil.
+func ListItems(expr Expression) ([]Expression, bool) {
+	items := []Expression{}
+	for {
+		// Compare against Nil rather than a concrete type so that Nil is the
+		// only terminator, however it is represented
+		if expr == Nil {
+			return items, true
+		}
+		switch e := expr.(type) {
+		case *Cons:
+			if e == nil {
+				return nil, false
+			}
+			items = append(items, e.car)
+			expr = e.cdr
+		default:
+			return nil, false
+		}
+	}
 }
 
 type Literal struct {
