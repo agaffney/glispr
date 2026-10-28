@@ -17,8 +17,10 @@ type ReaderError struct {
 
 func newReaderError(i *Input, format string, args ...any) ReaderError {
 	return ReaderError{
-		Line:    i.line,
-		Offset:  i.linePos,
+		Line: i.line,
+		// linePos is 0 right after a newline, such as when the input ends
+		// there, but offsets are 1-based
+		Offset:  max(i.linePos, 1),
 		message: fmt.Sprintf(format, args...),
 	}
 }

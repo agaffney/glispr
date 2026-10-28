@@ -48,6 +48,19 @@ func (r *Reader) Read(i *Input) (Expression, error) {
 	}
 }
 
+// readRequired reads an expression that must be present, so reaching the end
+// of the input is an error.
+func (r *Reader) readRequired(i *Input) (Expression, error) {
+	expr, err := r.Read(i)
+	if err != nil {
+		return nil, err
+	}
+	if expr == nil {
+		return nil, newReaderError(i, "unexpected end of file")
+	}
+	return expr, nil
+}
+
 func (r *Reader) readOne(i *Input) (Expression, error) {
 	tokenBuf := bytes.NewBuffer(nil)
 	tokenEscaped := make([]bool, 0)
@@ -57,6 +70,9 @@ func (r *Reader) readOne(i *Input) (Expression, error) {
 		ch, _, err := i.ReadRune()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				if multipleEscape {
+					return nil, newReaderError(i, "unexpected end of file in multiple escape")
+				}
 				if tokenBuf.Len() == 0 {
 					return nil, nil
 				}
@@ -148,6 +164,9 @@ func (r *Reader) readOne(i *Input) (Expression, error) {
 			// Read next character and write to token buffer
 			ch, _, err = i.ReadRune()
 			if err != nil {
+				if errors.Is(err, io.EOF) {
+					return nil, newReaderError(i, "unexpected end of file after single escape")
+				}
 				return nil, err
 			}
 			_, _ = tokenBuf.WriteRune(ch)
@@ -175,6 +194,9 @@ func readString(r *Reader, i *Input, initialChar rune) (Expression, error) {
 	for {
 		ch, _, err = i.ReadRune()
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, newReaderError(i, "unexpected end of file in string")
+			}
 			return nil, err
 		}
 		st = r.rt.SyntaxTypeFunc(ch)
@@ -195,7 +217,7 @@ func readString(r *Reader, i *Input, initialChar rune) (Expression, error) {
 }
 
 func readLiteral(r *Reader, i *Input, initialChar rune) (Expression, error) {
-	item, err := r.Read(i)
+	item, err := r.readRequired(i)
 	if err != nil {
 		return nil, err
 	}
@@ -377,6 +399,9 @@ func readList(r *Reader, i *Input, initialChar rune) (Expression, error) {
 	for {
 		ch, _, err = i.ReadRune()
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, newReaderError(i, "unexpected end of file in list")
+			}
 			return nil, err
 		}
 		if r.rt.SyntaxTypeFunc(ch) == ReadtableSyntaxTypeWhitespace {
