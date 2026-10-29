@@ -1852,3 +1852,98 @@ func TestReaderPackageMarkers(t *testing.T) {
 	_, status := lib.Find("TMP")
 	assert.Equal(t, types.SymbolStatusInternal, status)
 }
+
+func TestReaderUninterned(t *testing.T) {
+	read := func(r *reader.Reader, input string) (types.Expression, error) {
+		i, err := reader.NewInput(strings.NewReader(input))
+		assert.NoError(t, err)
+		return r.Read(i)
+	}
+
+	valid := []struct {
+		input string
+		name  string
+	}{
+		{"#:foo", "FOO"},
+		{"#:FOO", "FOO"},
+		{"#:|foo|", "foo"},
+		{`#:|a|b`, "aB"},
+		{`#:a\:b`, "A:B"},
+		{`#:|a:b|`, "a:b"},
+		{`#:a\:\:b`, "A::B"},
+		{"#:||", ""},
+		// Not numbers
+		{"#:1", "1"},
+		{"#:1.5", "1.5"},
+		{"#:nil", "NIL"},
+		{"#:t", "T"},
+		// A character that is a macro at the start of a token is part of the name
+		{"#:#a", "#A"},
+		{"#:a#b", "A#B"},
+		// The token ends where any other would
+		{"#:a b", "A"},
+		{"#:a(", "A"},
+		{`#:a"`, "A"},
+		{"#:a;b", "A"},
+	}
+	for _, tc := range valid {
+		r := newTestReader()
+		got, err := read(r, tc.input)
+		assert.NoError(t, err, "input %q", tc.input)
+		sym, ok := got.(*types.Symbol)
+		if !assert.True(t, ok, "input %q", tc.input) {
+			continue
+		}
+		assert.Equal(t, tc.name, sym.Name(), "input %q", tc.input)
+		assert.Nil(t, sym.Package(), "input %q", tc.input)
+	}
+
+	// Each read is a different symbol, and none is the interned one
+	r := newTestReader()
+	interned, err := read(r, "foo")
+	assert.NoError(t, err)
+	a, err := read(r, "#:foo")
+	assert.NoError(t, err)
+	b, err := read(r, "#:foo")
+	assert.NoError(t, err)
+	assert.NotSame(t, a, b)
+	assert.NotSame(t, interned, a)
+	// The package is untouched
+	found, _ := testPackages.User().Find("FOO")
+	assert.Same(t, interned, found)
+
+	// In a list, with the rest of the list still read
+	got, err := read(r, "(#:a #:b)")
+	assert.NoError(t, err)
+	items, _ := types.ListItems(got)
+	assert.Len(t, items, 2)
+
+	invalid := []struct {
+		input string
+		msg   string
+	}{
+		{"#:", "symbol name missing"},
+		{"#: foo", "symbol name missing"},
+		{"#:\n", "symbol name missing"},
+		{"#:(a)", "symbol name missing"},
+		{"#:)", "symbol name missing"},
+		{`#:"a"`, "symbol name missing"},
+		{"#:;a", "symbol name missing"},
+		{"#:'a", "symbol name missing"},
+		{"#:a:b", "package marker"},
+		{"#:a::b", "package marker"},
+		{"#::a", "package marker"},
+		{"#:a:", "package marker"},
+		{"#::", "package marker"},
+		{"#:.", "only of dots"},
+		{"#:...", "only of dots"},
+		{"#:a|b", "end of file in multiple escape"},
+		{"#:\x01", "invalid character"},
+	}
+	for _, tc := range invalid {
+		_, err := read(newTestReader(), tc.input)
+		assert.ErrorContains(t, err, tc.msg, "input %q", tc.input)
+		var rerr reader.ReaderError
+		assert.ErrorAs(t, err, &rerr, "input %q", tc.input)
+	}
+}

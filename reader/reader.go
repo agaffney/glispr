@@ -396,6 +396,50 @@ func finishCharacter(i *Input, tok *token) (readResult, error) {
 	return readResult{expr: types.NewCharacter(ch), tok: tok}, nil
 }
 
+// readUninterned reads the token after #: and returns a new symbol with that
+// name, which is in no package. Each read makes a different symbol. The token
+// is only a name, so it can't be a number or have package markers.
+func readUninterned(r *Reader, i *Input) (types.Expression, error) {
+	ch, _, err := i.ReadRune()
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, newReaderError(i, "symbol name missing after #:")
+		}
+		return nil, err
+	}
+	tok := &token{}
+	switch r.rt.SyntaxTypeFunc(ch) {
+	case ReadtableSyntaxTypeWhitespace, ReadtableSyntaxTypeMacroTerminating:
+		return nil, newReaderError(i, "symbol name missing after #:")
+	case ReadtableSyntaxTypeMacroNonTerminating:
+		// readItem would run its macro function at the start of a token, but
+		// here it is the first character of the name
+		tok.add(ch, false)
+	default:
+		if err := i.UnreadRune(); err != nil {
+			return nil, err
+		}
+	}
+	res, err := r.readItem(i, tok, r.finishUninterned)
+	if err != nil {
+		return nil, err
+	}
+	return res.expr, nil
+}
+
+// finishUninterned converts the token after #: to an uninterned symbol.
+func (r *Reader) finishUninterned(i *Input, tok *token) (readResult, error) {
+	if tok.allDots() {
+		return readResult{}, newReaderError(i, "token consists only of dots: %q", tok.String())
+	}
+	for _, c := range tok.chars {
+		if c.traits&traitPackageMarker != 0 {
+			return readResult{}, newReaderError(i, "package marker in uninterned symbol: %q", tok.String())
+		}
+	}
+	return readResult{expr: types.NewSymbol(r.caseConvert(tok))}, nil
+}
+
 // isASCIIDigit reports whether r is one of 0-9. Digits from other scripts are
 // not digits for a dispatch macro's numeric argument.
 func isASCIIDigit(r rune) bool { return r >= '0' && r <= '9' }
@@ -420,6 +464,8 @@ func readDispatch(r *Reader, i *Input, initialChar rune) (types.Expression, erro
 		return readCharacter(r, i)
 	case '(':
 		return readVector(r, i, -1)
+	case ':':
+		return readUninterned(r, i)
 	case 'b', 'B':
 		return readDispatchRadixNumber(r, i, 2)
 	case 'o', 'O':
