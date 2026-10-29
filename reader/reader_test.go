@@ -403,6 +403,50 @@ func TestReaderUnusualCharacters(t *testing.T) {
 	}
 }
 
+func TestReaderDispatchNonASCIIDigits(t *testing.T) {
+	testDefs := []struct {
+		input   string
+		wantErr string
+	}{
+		// Arabic-indic three, then a fullwidth one
+		{"#\u0663r10", "unknown dispatch macro"},
+		{"#\uff11r10", "unknown dispatch macro"},
+		{"#1\u0663r10", "expected 'r'"},
+		{"#\u0663", "unknown dispatch macro"},
+		// A non-ASCII digit first, with ASCII digits after it
+		{"#\u06631r10", "unknown dispatch macro"},
+		{"#\u06631", "unknown dispatch macro"},
+	}
+	r := reader.NewReader()
+	for _, testDef := range testDefs {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		assert.ErrorContains(t, err, testDef.wantErr, "input: %q", testDef.input)
+		assert.Nil(t, tmp, "input: %q", testDef.input)
+	}
+
+	// ASCII digits still work, with more than one digit and either case of the r
+	for _, testDef := range []struct {
+		input string
+		want  int64
+	}{
+		{"#2r101", 5},
+		{"#16rFF", 255},
+		{"#16RFF", 255},
+		{"#36rZ", 35},
+		{"#36Rz", 35},
+		{"#010r12", 12},
+	} {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+		got, err := r.Read(i)
+		assert.NoError(t, err, testDef.input)
+		assert.Equal(t, types.NewNumberInteger(big.NewInt(testDef.want)), got, testDef.input)
+	}
+}
+
 func TestReaderRubout(t *testing.T) {
 	sym := types.NewSymbol
 	testDefs := []struct {
@@ -1096,6 +1140,10 @@ func TestReaderError(t *testing.T) {
 		{input: "1f39", wantLine: 1, wantOffset: 4},
 		{input: "1e-46", wantLine: 1, wantOffset: 5},
 		{input: "1d309", wantLine: 1, wantOffset: 5},
+		// Only ASCII digits are digits in a dispatch macro's numeric argument
+		{input: "#\u0663r10", wantLine: 1, wantOffset: 2},
+		{input: "#1\u0663r10", wantLine: 1, wantOffset: 3},
+		{input: "#\uff11r10", wantLine: 1, wantOffset: 2},
 		{input: "#p", wantLine: 1, wantOffset: 2},
 		{input: "\n#p", wantLine: 2, wantOffset: 2},
 		{input: "#1r0", wantLine: 1, wantOffset: 3},

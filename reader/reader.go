@@ -229,6 +229,10 @@ func readCloseParen(r *Reader, i *Input, initialChar rune) (types.Expression, er
 	return nil, newReaderError(i, "unmatched close parenthesis")
 }
 
+// isASCIIDigit reports whether r is one of 0-9. Digits from other scripts are
+// not digits for a dispatch macro's numeric argument.
+func isASCIIDigit(r rune) bool { return r >= '0' && r <= '9' }
+
 func readDispatch(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
 	// initialChar is '#'; the next rune is the dispatch character.
 	dispatch, _, err := i.ReadRune()
@@ -250,7 +254,7 @@ func readDispatch(r *Reader, i *Input, initialChar rune) (types.Expression, erro
 		return readDispatchRadixNumber(r, i, dispatch)
 	default:
 		// Complex radix number forms: #<radix>r<number>
-		if unicode.IsDigit(dispatch) {
+		if isASCIIDigit(dispatch) {
 			return readDispatchRadixNumber(r, i, dispatch)
 		}
 	}
@@ -307,7 +311,7 @@ func readDispatchRadixNumber(r *Reader, i *Input, dispatch rune) (types.Expressi
 	radix := 10
 	var radixDigits []rune
 
-	if unicode.IsDigit(dispatch) {
+	if isASCIIDigit(dispatch) {
 		// #<digits>r<number> form
 		radixDigits = []rune{dispatch}
 		for {
@@ -318,7 +322,7 @@ func readDispatchRadixNumber(r *Reader, i *Input, dispatch rune) (types.Expressi
 				}
 				return nil, err
 			}
-			if unicode.IsDigit(next) {
+			if isASCIIDigit(next) {
 				radixDigits = append(radixDigits, next)
 				continue
 			}
