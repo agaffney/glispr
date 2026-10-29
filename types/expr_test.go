@@ -34,7 +34,7 @@ func TestExpressionString(t *testing.T) {
 		want string
 	}{
 		{types.NewList(nil), `()`},
-		{types.NewList([]types.Expression{types.NewSymbol("foo")}), `(|foo|)`},
+		{types.NewList([]types.Expression{types.NewSymbol("foo")}), `(#:|foo|)`},
 		{
 			types.NewList([]types.Expression{
 				types.NewSymbol("foo"),
@@ -42,37 +42,37 @@ func TestExpressionString(t *testing.T) {
 				types.NewNumberInteger(big.NewInt(1)),
 				types.NewList([]types.Expression{types.NewNumberRatio(big.NewRat(1, 2))}),
 			}),
-			`(|foo| "bar" 1 (1/2))`,
+			`(#:|foo| "bar" 1 (1/2))`,
 		},
 		{
 			types.NewCons(types.NewSymbol("a"), types.NewSymbol("b")),
-			`(|a| . |b|)`,
+			`(#:|a| . #:|b|)`,
 		},
 		{
 			types.NewCons(types.NewSymbol("a"), types.NewCons(types.NewSymbol("b"), types.NewSymbol("c"))),
-			`(|a| |b| . |c|)`,
+			`(#:|a| #:|b| . #:|c|)`,
 		},
 		{
 			types.NewList([]types.Expression{
 				types.NewList([]types.Expression{types.NewSymbol("a")}),
 				types.NewSymbol("b"),
 			}),
-			`((|a|) |b|)`,
+			`((#:|a|) #:|b|)`,
 		},
 		{
 			types.NewCons(types.NewCons(types.NewSymbol("a"), types.NewSymbol("b")), types.Nil),
-			`((|a| . |b|))`,
+			`((#:|a| . #:|b|))`,
 		},
 		{
 			types.NewCons(types.NewSymbol("a"), types.NewList([]types.Expression{types.NewSymbol("b")})),
-			`(|a| |b|)`,
+			`(#:|a| #:|b|)`,
 		},
 		{types.NewCons(types.Nil, types.Nil), `(())`},
 		{(*types.Cons)(nil), `<nil>`},
-		{types.NewLiteral(types.NewSymbol("foo")), `'|foo|`},
+		{types.NewLiteral(types.NewSymbol("foo")), `'#:|foo|`},
 		{types.NewLiteral(types.NewList(nil)), `'()`},
 		{types.NewString("foo bar"), `"foo bar"`},
-		{types.NewSymbol("foo"), `|foo|`},
+		{types.NewSymbol("foo"), `#:|foo|`},
 	}
 	for _, testDef := range testDefs {
 		assert.Equal(t, testDef.want, testDef.expr.String())
@@ -225,8 +225,8 @@ func TestNewListTail(t *testing.T) {
 	assert.Same(t, baz, types.NewListTail(nil, baz))
 	assert.Same(t, types.Nil, types.NewListTail(nil, types.Nil))
 
-	assert.Equal(t, `(|foo| |bar| . |baz|)`, types.NewListTail([]types.Expression{foo, bar}, baz).String())
-	assert.Equal(t, `(|foo| |bar|)`, types.NewListTail([]types.Expression{foo, bar}, types.Nil).String())
+	assert.Equal(t, `(#:|foo| #:|bar| . #:|baz|)`, types.NewListTail([]types.Expression{foo, bar}, baz).String())
+	assert.Equal(t, `(#:|foo| #:|bar|)`, types.NewListTail([]types.Expression{foo, bar}, types.Nil).String())
 
 	var nilCons *types.Cons
 	assert.Panics(t, func() { types.NewListTail(nil, nil) })

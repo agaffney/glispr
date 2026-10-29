@@ -139,7 +139,8 @@ func (r *Reader) readSymbol(i *Input, tok *token) (types.Expression, error) {
 	// Tokens for each part, so case conversion sees only that part's characters
 	pkgTok := &token{chars: tok.chars[:start]}
 	nameTok := &token{chars: tok.chars[end:]}
-	if len(nameTok.chars) == 0 {
+	// An empty escape (||) gives an empty name or package name with no characters
+	if len(nameTok.chars) == 0 && !tok.hasEscapeAt(end) {
 		return nil, newReaderError(i, "symbol name missing after package marker in token: %q", tok.String())
 	}
 	// The check in finishToken only saw the whole token, which has the marker
@@ -148,7 +149,7 @@ func (r *Reader) readSymbol(i *Input, tok *token) (types.Expression, error) {
 	}
 	name := r.caseConvert(nameTok)
 	internal := end-start == 2
-	shorthand := len(pkgTok.chars) == 0
+	shorthand := len(pkgTok.chars) == 0 && !tok.hasEscapeAt(0)
 	var pkg *types.Package
 	if shorthand {
 		// The keyword form has no package name, and :: needs one
@@ -311,7 +312,7 @@ func (r *Reader) readItem(i *Input, tok *token, finish func(*Input, *token) (rea
 			tok.add(ch, true)
 		case ReadtableSyntaxTypeMultipleEscape:
 			multipleEscape = !multipleEscape
-			tok.sawEscape = true
+			tok.markEscape()
 			continue
 		case ReadtableSyntaxTypeConstituent:
 			tok.add(ch, multipleEscape)

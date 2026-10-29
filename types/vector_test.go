@@ -56,7 +56,7 @@ func TestVectorString(t *testing.T) {
 		want string
 	}{
 		{types.NewVector(nil), `#()`},
-		{types.NewVector([]types.Expression{types.NewSymbol("foo")}), `#(|foo|)`},
+		{types.NewVector([]types.Expression{types.NewSymbol("foo")}), `#(#:|foo|)`},
 		{
 			types.NewVector([]types.Expression{
 				types.NewSymbol("foo"),
@@ -66,14 +66,14 @@ func TestVectorString(t *testing.T) {
 				types.NewList([]types.Expression{types.NewNumberRatio(big.NewRat(1, 2))}),
 				types.Nil,
 			}),
-			`#(|foo| "bar" 1 #\a (1/2) ())`,
+			`#(#:|foo| "bar" 1 #\a (1/2) ())`,
 		},
 		{
 			types.NewVector([]types.Expression{
 				types.NewVector([]types.Expression{types.NewSymbol("a")}),
 				types.NewVector(nil),
 			}),
-			`#(#(|a|) #())`,
+			`#(#(#:|a|) #())`,
 		},
 	}
 	for _, testDef := range testDefs {

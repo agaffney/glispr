@@ -1,9 +1,6 @@
 package types
 
-import (
-	"slices"
-	"strings"
-)
+import "slices"
 
 // Vector is a one-dimensional array of objects.
 type Vector struct {
@@ -33,15 +30,4 @@ func (v Vector) At(i int) Expression { return v.items[i] }
 // Items returns a copy of the items in the vector.
 func (v Vector) Items() []Expression { return slices.Clone(v.items) }
 
-func (v Vector) String() string {
-	var sb strings.Builder
-	sb.WriteString("#(")
-	for i, item := range v.items {
-		if i > 0 {
-			sb.WriteString(" ")
-		}
-		sb.WriteString(item.String())
-	}
-	sb.WriteString(")")
-	return sb.String()
-}
+func (v Vector) String() string { return Format(&v, nil) }

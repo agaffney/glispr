@@ -82,30 +82,7 @@ func (c *Cons) Cdr() Expression {
 	return c.cdr
 }
 
-func (c *Cons) String() string {
-	if c == nil {
-		return "<nil>"
-	}
-	var sb strings.Builder
-	sb.WriteString(`(`)
-	sb.WriteString(c.car.String())
-	rest := c.cdr
-	for {
-		next, ok := rest.(*Cons)
-		if !ok {
-			break
-		}
-		sb.WriteString(` `)
-		sb.WriteString(next.car.String())
-		rest = next.cdr
-	}
-	if rest != Nil {
-		sb.WriteString(` . `)
-		sb.WriteString(rest.String())
-	}
-	sb.WriteString(`)`)
-	return sb.String()
-}
+func (c *Cons) String() string { return Format(c, nil) }
 
 // NewList builds a proper list from items. It returns Nil if there are none.
 // The returned list does not share storage with items. It panics if any item
@@ -165,9 +142,7 @@ func NewLiteral(item Expression) *Literal {
 
 func (Literal) Type() ExpressionType { return ExpressionTypeLiteral }
 
-func (l Literal) String() string {
-	return fmt.Sprintf("'%s", l.item.String())
-}
+func (l Literal) String() string { return Format(&l, nil) }
 
 func (l Literal) Item() Expression {
 	return l.item
@@ -373,10 +348,9 @@ func NewSymbol(name string) *Symbol {
 
 func (Symbol) Type() ExpressionType { return ExpressionTypeSymbol }
 
-func (s Symbol) String() string {
-	// TODO
-	return fmt.Sprintf(`|%s|`, s.name)
-}
+// String returns the symbol in reader syntax, qualified with its package. Use
+// Format to print it relative to a current package.
+func (s Symbol) String() string { return Format(&s, nil) }
 
 func (s Symbol) Name() string {
 	return s.name
