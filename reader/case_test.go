@@ -9,8 +9,12 @@ import (
 	"github.com/agaffney/glispr/types"
 )
 
+var testPackages = types.NewPackages()
+
+func newTestReader() *Reader { return NewReader(testPackages) }
+
 func TestReaderCaseUpcaseEscapes(t *testing.T) {
-	r := NewReader()
+	r := newTestReader()
 	testCases := []struct {
 		input string
 		want  string
@@ -42,7 +46,7 @@ func TestReaderCaseUpcaseEscapes(t *testing.T) {
 }
 
 func TestReaderCaseDowncase(t *testing.T) {
-	r := NewReader()
+	r := newTestReader()
 	r.rt.CaseMode = ReadtableCaseModeDowncase
 	testCases := []struct {
 		input string
@@ -69,7 +73,7 @@ func TestReaderCaseDowncase(t *testing.T) {
 }
 
 func TestReaderCaseInvert(t *testing.T) {
-	r := NewReader()
+	r := newTestReader()
 	r.rt.CaseMode = ReadtableCaseModeInvert
 	testCases := []struct {
 		input string
@@ -101,7 +105,7 @@ func TestReaderCaseInvert(t *testing.T) {
 }
 
 func TestReaderCasePreserve(t *testing.T) {
-	r := NewReader()
+	r := newTestReader()
 	r.rt.CaseMode = ReadtableCaseModePreserve
 	testCases := []struct {
 		input string
@@ -132,7 +136,7 @@ func TestReaderCharacterCase(t *testing.T) {
 		ReadtableCaseModePreserve,
 		ReadtableCaseModeInvert,
 	} {
-		r := NewReader()
+		r := newTestReader()
 		r.rt.CaseMode = mode
 		testCases := []struct {
 			input string
