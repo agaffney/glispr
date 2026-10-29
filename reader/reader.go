@@ -13,8 +13,15 @@ import (
 	"github.com/agaffney/glispr/types"
 )
 
+// A Reader interns symbols, which changes its package set, so readers that
+// share a set must not be used concurrently.
 type Reader struct {
 	rt Readtable
+	// Packages is the set of packages that symbols are interned in, and Package
+	// is the current package, the equivalent of *package*. It must belong to
+	// Packages: reading a symbol with any other value is an error.
+	Packages *types.Packages
+	Package  *types.Package
 	// DefaultFloatFormat is the format of floats with no exponent marker or the
 	// marker e. It is the equivalent of *read-default-float-format*, and must be
 	// types.FloatFormatSingle or types.FloatFormatDouble: reading such a float
@@ -22,9 +29,13 @@ type Reader struct {
 	DefaultFloatFormat types.FloatFormat
 }
 
-func NewReader() *Reader {
+// NewReader returns a reader that interns symbols in ps, with COMMON-LISP-USER
+// as the current package.
+func NewReader(ps *types.Packages) *Reader {
 	return &Reader{
 		rt:                 StandardReadtable,
+		Packages:           ps,
+		Package:            ps.User(),
 		DefaultFloatFormat: types.FloatFormatSingle,
 	}
 }
@@ -79,7 +90,25 @@ func (r *Reader) finishToken(i *Input, tok *token) (readResult, error) {
 			return readResult{expr: tmpNum, tok: tok}, nil
 		}
 	}
-	return readResult{expr: types.NewSymbol(r.caseConvert(tok)), tok: tok}, nil
+	expr, err := r.intern(i, r.caseConvert(tok))
+	if err != nil {
+		return readResult{}, err
+	}
+	return readResult{expr: expr, tok: tok}, nil
+}
+
+// intern returns the symbol with the given name in the current package, except
+// that COMMON-LISP:NIL is the object Nil, not a symbol. It is an error if the
+// current package is not in the package set.
+func (r *Reader) intern(i *Input, name string) (types.Expression, error) {
+	if r.Packages == nil || r.Package == nil || r.Packages.Find(r.Package.Name()) != r.Package {
+		return nil, newReaderError(i, "current package is not in the package set")
+	}
+	sym, _ := r.Package.Intern(name)
+	if sym.Package() == r.Packages.CommonLisp() && name == "NIL" {
+		return types.Nil, nil
+	}
+	return sym, nil
 }
 
 func (r *Reader) Read(i *Input) (types.Expression, error) {
@@ -280,7 +309,7 @@ func readDispatch(r *Reader, i *Input, initialChar rune) (types.Expression, erro
 	dispatch, _, err := i.ReadRune()
 	if err != nil {
 		if errors.Is(err, io.EOF) {
-			return types.NewSymbol("#"), nil
+			return r.intern(i, "#")
 		}
 		return nil, err
 	}

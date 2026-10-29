@@ -7,10 +7,23 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/agaffney/glispr/reader"
 	"github.com/agaffney/glispr/types"
-	"github.com/stretchr/testify/assert"
 )
+
+// testPackages is shared by the readers and expected symbols in these tests,
+// so that a symbol read has the same identity as the one expected.
+var testPackages = types.NewPackages()
+
+func newTestReader() *reader.Reader { return reader.NewReader(testPackages) }
+
+// testSym returns the symbol with the given name in COMMON-LISP-USER.
+func testSym(name string) *types.Symbol {
+	sym, _ := testPackages.User().Intern(name)
+	return sym
+}
 
 // singleFloat and doubleFloat return the float that reading f in that format
 // should produce.
@@ -52,7 +65,7 @@ func TestReaderString(t *testing.T) {
 			expectedValue: `foo \" bar`,
 		},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(
 			strings.NewReader(testDef.input),
@@ -248,7 +261,7 @@ func TestReaderSymbol(t *testing.T) {
 			expectedName: `1`,
 		},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(
 			strings.NewReader(testDef.input),
@@ -271,7 +284,7 @@ func TestReaderSymbol(t *testing.T) {
 // An empty multiple escape starts a token, so it must be handled the same way as
 // any other token no matter what ends it.
 func TestReaderEmptyMultipleEscapeTerminators(t *testing.T) {
-	sym := types.NewSymbol
+	sym := testSym
 	testDefs := []struct {
 		input string
 		want  []types.Expression
@@ -289,7 +302,7 @@ func TestReaderEmptyMultipleEscapeTerminators(t *testing.T) {
 		{`||a#b`, []types.Expression{sym("A#B")}},
 		{`|| #`, []types.Expression{sym(""), sym("#")}},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(strings.NewReader(testDef.input))
 		assert.NoError(t, err)
@@ -318,7 +331,7 @@ func TestReaderInvalidCharacter(t *testing.T) {
 		"(a\u3000b)",
 		"a\u00a0b",
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, input := range inputs {
 		i, err := reader.NewInput(strings.NewReader(input))
 		assert.NoError(t, err)
@@ -334,7 +347,7 @@ func TestReaderInvalidCharacter(t *testing.T) {
 	assert.NoError(t, err)
 	tmp, err := r.Read(i)
 	assert.NoError(t, err)
-	assert.Equal(t, types.NewSymbol("A\x01B"), tmp)
+	assert.Equal(t, testSym("A\x01B"), tmp)
 }
 
 func TestReaderMalformedUTF8(t *testing.T) {
@@ -351,7 +364,7 @@ func TestReaderMalformedUTF8(t *testing.T) {
 		{"|a\xffb|", 1, 3},
 		{"a\n\xff", 2, 1},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(strings.NewReader(testDef.input))
 		assert.NoError(t, err)
@@ -377,7 +390,7 @@ func TestReaderMalformedUTF8(t *testing.T) {
 
 // Characters that are valid in the input but unusual, which are accepted
 func TestReaderUnusualCharacters(t *testing.T) {
-	sym := types.NewSymbol
+	sym := testSym
 	testDefs := []struct {
 		input string
 		want  types.Expression
@@ -392,7 +405,7 @@ func TestReaderUnusualCharacters(t *testing.T) {
 		{"\"a\x01b\"", types.NewString("a\x01b")},
 		{"; \x01\nfoo", sym("FOO")},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(strings.NewReader(testDef.input))
 		assert.NoError(t, err)
@@ -417,7 +430,7 @@ func TestReaderDispatchNonASCIIDigits(t *testing.T) {
 		{"#\u06631r10", "unknown dispatch macro"},
 		{"#\u06631", "unknown dispatch macro"},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(strings.NewReader(testDef.input))
 		assert.NoError(t, err)
@@ -448,7 +461,7 @@ func TestReaderDispatchNonASCIIDigits(t *testing.T) {
 }
 
 func TestReaderVector(t *testing.T) {
-	sym := types.NewSymbol
+	sym := testSym
 	vec := func(items ...types.Expression) *types.Vector { return types.NewVector(items) }
 	num := func(n int64) *types.Number { return types.NewNumberInteger(big.NewInt(n)) }
 	testDefs := []struct {
@@ -482,7 +495,7 @@ func TestReaderVector(t *testing.T) {
 		{`#(a.b .c)`, []types.Expression{vec(sym("A.B"), sym(".C"))}},
 		{`#(\. |.|)`, []types.Expression{vec(sym("."), sym("."))}},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(strings.NewReader(testDef.input))
 		assert.NoError(t, err)
@@ -505,7 +518,7 @@ func TestReaderVector(t *testing.T) {
 }
 
 func TestReaderVectorLength(t *testing.T) {
-	sym := types.NewSymbol
+	sym := testSym
 	vec := func(items ...types.Expression) *types.Vector { return types.NewVector(items) }
 	testDefs := []struct {
 		input string
@@ -521,7 +534,7 @@ func TestReaderVectorLength(t *testing.T) {
 		{`#03(a)`, vec(sym("A"), sym("A"), sym("A"))},
 		{`#010(a)`, vec(sym("A"), sym("A"), sym("A"), sym("A"), sym("A"), sym("A"), sym("A"), sym("A"), sym("A"), sym("A"))},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(strings.NewReader(testDef.input))
 		assert.NoError(t, err)
@@ -553,7 +566,7 @@ func TestReaderVectorLength(t *testing.T) {
 // A close paren after a vector is not part of it, so it is left for the next
 // read, which treats it as unmatched like any other stray one.
 func TestReaderVectorStrayCloseParen(t *testing.T) {
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, input := range []string{`#(a b))`, `#())`, `#3(a))`} {
 		i, err := reader.NewInput(strings.NewReader(input))
 		assert.NoError(t, err)
@@ -605,7 +618,7 @@ func TestReaderVectorErrors(t *testing.T) {
 		{`#1r(a)`, "radix must be between 2 and 36"},
 		{`#99999999999999999999r1`, "radix must be between 2 and 36"},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(strings.NewReader(testDef.input))
 		assert.NoError(t, err)
@@ -676,12 +689,12 @@ func TestReaderCharacter(t *testing.T) {
 		{`#\u+1F600`, []types.Expression{char(0x1f600)}},
 		{`#\U+0`, []types.Expression{char(0)}},
 		// Where the token ends
-		{`#\a b`, []types.Expression{char('a'), types.NewSymbol("B")}},
+		{`#\a b`, []types.Expression{char('a'), testSym("B")}},
 		{`#\a;comment`, []types.Expression{char('a')}},
 		{`#\Space;comment`, []types.Expression{char(' ')}},
 		{`#\a"b"`, []types.Expression{char('a'), types.NewString("b")}},
-		{`#\a'b`, []types.Expression{char('a'), types.NewLiteral(types.NewSymbol("B"))}},
-		{`#\a(b)`, []types.Expression{char('a'), types.NewList([]types.Expression{types.NewSymbol("B")})}},
+		{`#\a'b`, []types.Expression{char('a'), types.NewLiteral(testSym("B"))}},
+		{`#\a(b)`, []types.Expression{char('a'), types.NewList([]types.Expression{testSym("B")})}},
 		{`#\a #\b`, []types.Expression{char('a'), char('b')}},
 		// Characters in other expressions
 		{`(#\a)`, []types.Expression{types.NewList([]types.Expression{char('a')})}},
@@ -689,10 +702,10 @@ func TestReaderCharacter(t *testing.T) {
 		{`(#\Space)`, []types.Expression{types.NewList([]types.Expression{char(' ')})}},
 		{`(#\()`, []types.Expression{types.NewList([]types.Expression{char('(')})}},
 		{`(#\))`, []types.Expression{types.NewList([]types.Expression{char(')')})}},
-		{`(a . #\b)`, []types.Expression{types.NewListTail([]types.Expression{types.NewSymbol("A")}, char('b'))}},
+		{`(a . #\b)`, []types.Expression{types.NewListTail([]types.Expression{testSym("A")}, char('b'))}},
 		{`'#\a`, []types.Expression{types.NewLiteral(char('a'))}},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(strings.NewReader(testDef.input))
 		assert.NoError(t, err)
@@ -716,7 +729,7 @@ func TestReaderCharacter(t *testing.T) {
 
 // Printing a character and reading it back must give the same character.
 func TestReaderCharacterRoundTrip(t *testing.T) {
-	r := reader.NewReader()
+	r := newTestReader()
 	check := func(code rune) {
 		c := types.NewCharacter(code)
 		i, err := reader.NewInput(strings.NewReader(c.String()))
@@ -778,7 +791,7 @@ func TestReaderCharacterErrors(t *testing.T) {
 		{"#\\a\x01", "invalid character"},
 		{"#\\\xff", "invalid UTF-8"},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(strings.NewReader(testDef.input))
 		assert.NoError(t, err)
@@ -792,7 +805,7 @@ func TestReaderCharacterErrors(t *testing.T) {
 }
 
 func TestReaderRubout(t *testing.T) {
-	sym := types.NewSymbol
+	sym := testSym
 	testDefs := []struct {
 		input string
 		want  []types.Expression
@@ -818,7 +831,7 @@ func TestReaderRubout(t *testing.T) {
 		{"a\\\x7fb", []types.Expression{sym("A\x7fB")}},
 		{"|a\x7fb|", []types.Expression{sym("a\x7fb")}},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(strings.NewReader(testDef.input))
 		assert.NoError(t, err)
@@ -855,40 +868,40 @@ func TestReaderList(t *testing.T) {
 		{
 			input: `(foo bar)`,
 			expectedItems: []types.Expression{
-				types.NewSymbol("FOO"),
-				types.NewSymbol("BAR"),
+				testSym("FOO"),
+				testSym("BAR"),
 			},
 		},
 		{
 			input: `(foo "bar")`,
 			expectedItems: []types.Expression{
-				types.NewSymbol("FOO"),
+				testSym("FOO"),
 				types.NewString("bar"),
 			},
 		},
 		{
 			input: `(a#b c)`,
 			expectedItems: []types.Expression{
-				types.NewSymbol("A#B"),
-				types.NewSymbol("C"),
+				testSym("A#B"),
+				testSym("C"),
 			},
 		},
 		{
 			input: `(||)`,
 			expectedItems: []types.Expression{
-				types.NewSymbol(""),
+				testSym(""),
 			},
 		},
 		{
 			input: `(a || b)`,
 			expectedItems: []types.Expression{
-				types.NewSymbol("A"),
-				types.NewSymbol(""),
-				types.NewSymbol("B"),
+				testSym("A"),
+				testSym(""),
+				testSym("B"),
 			},
 		},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(
 			strings.NewReader(testDef.input),
@@ -915,19 +928,19 @@ func TestReaderLiteral(t *testing.T) {
 	}{
 		{
 			input:        `'foo`,
-			expectedItem: types.NewSymbol("FOO"),
+			expectedItem: testSym("FOO"),
 		},
 		{
 			input: `'(foo bar)`,
 			expectedItem: types.NewList(
 				[]types.Expression{
-					types.NewSymbol("FOO"),
-					types.NewSymbol("BAR"),
+					testSym("FOO"),
+					testSym("BAR"),
 				},
 			),
 		},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(
 			strings.NewReader(testDef.input),
@@ -1049,7 +1062,7 @@ func TestReaderNumber(t *testing.T) {
 			expectedNum: singleFloat(-0.000000001e9),
 		},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(
 			strings.NewReader(testDef.input),
@@ -1100,7 +1113,7 @@ func TestReaderFloatFormat(t *testing.T) {
 		{`(1.5d0)`, types.FloatFormatSingle, nil, "(1.5)"},
 	}
 	for _, testDef := range testDefs {
-		r := reader.NewReader()
+		r := newTestReader()
 		r.DefaultFloatFormat = testDef.def
 		i, err := reader.NewInput(strings.NewReader(testDef.input))
 		assert.NoError(t, err)
@@ -1120,11 +1133,11 @@ func TestReaderFloatFormat(t *testing.T) {
 	}
 
 	// The standard default is single-float
-	assert.Equal(t, types.FloatFormatSingle, reader.NewReader().DefaultFloatFormat)
+	assert.Equal(t, types.FloatFormatSingle, newTestReader().DefaultFloatFormat)
 }
 
 func TestReaderUnknownFloatFormat(t *testing.T) {
-	r := reader.NewReader()
+	r := newTestReader()
 	r.DefaultFloatFormat = types.FloatFormatNone
 
 	// Floats that need the default are a reader error, not a panic
@@ -1145,7 +1158,7 @@ func TestReaderUnknownFloatFormat(t *testing.T) {
 		"1/2":   types.NewNumberRatio(big.NewRat(1, 2)),
 		"1.5d0": doubleFloat(1.5),
 		"1.5f0": singleFloat(1.5),
-		"a":     types.NewSymbol("A"),
+		"a":     testSym("A"),
 	} {
 		i, err := reader.NewInput(strings.NewReader(input))
 		assert.NoError(t, err)
@@ -1163,7 +1176,7 @@ func TestReaderExpression(t *testing.T) {
 		{
 			input: `(+ 2 3)`,
 			expectedExpr: types.NewList([]types.Expression{
-				types.NewSymbol(`+`),
+				testSym(`+`),
 				types.NewNumberInteger(big.NewInt(2)),
 				types.NewNumberInteger(big.NewInt(3)),
 			}),
@@ -1179,11 +1192,11 @@ func TestReaderExpression(t *testing.T) {
 		{
 			input: "; a comment\n(foo)",
 			expectedExpr: types.NewList([]types.Expression{
-				types.NewSymbol(`FOO`),
+				testSym(`FOO`),
 			}),
 		},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(
 			strings.NewReader(testDef.input),
@@ -1203,7 +1216,7 @@ func TestReaderExpression(t *testing.T) {
 }
 
 func TestReaderCloseParen(t *testing.T) {
-	r := reader.NewReader()
+	r := newTestReader()
 
 	t.Run("unmatched close parenthesis errors", func(t *testing.T) {
 		i, err := reader.NewInput(strings.NewReader(")"))
@@ -1257,7 +1270,7 @@ func TestReaderCloseParen(t *testing.T) {
 }
 
 func TestReaderDispatchRadix(t *testing.T) {
-	r := reader.NewReader()
+	r := newTestReader()
 
 	testDefs := []struct {
 		input       string
@@ -1353,7 +1366,7 @@ func TestReaderDispatchRadix(t *testing.T) {
 }
 
 func TestReaderBlockComment(t *testing.T) {
-	r := reader.NewReader()
+	r := newTestReader()
 
 	t.Run("discards block comment", func(t *testing.T) {
 		i, err := reader.NewInput(strings.NewReader("#| comment |#foo"))
@@ -1382,8 +1395,8 @@ func TestReaderBlockComment(t *testing.T) {
 		tmp, err := r.Read(i)
 		assert.NoError(t, err)
 		assert.Equal(t, types.NewList([]types.Expression{
-			types.NewSymbol("FOO"),
-			types.NewSymbol("BAR"),
+			testSym("FOO"),
+			testSym("BAR"),
 		}), tmp)
 	})
 
@@ -1394,7 +1407,7 @@ func TestReaderBlockComment(t *testing.T) {
 		tmp, err := r.Read(i)
 		assert.NoError(t, err)
 		assert.Equal(t, types.NewList([]types.Expression{
-			types.NewSymbol("FOO"),
+			testSym("FOO"),
 		}), tmp)
 	})
 
@@ -1415,7 +1428,7 @@ func TestReaderEndOfInput(t *testing.T) {
 		i, err := reader.NewInput(strings.NewReader(input))
 		assert.NoError(t, err)
 
-		tmp, err := reader.NewReader().Read(i)
+		tmp, err := newTestReader().Read(i)
 		assert.NoError(t, err, "input: %q", input)
 		assert.Nil(t, tmp, "input: %q", input)
 	}
@@ -1513,7 +1526,7 @@ func TestReaderError(t *testing.T) {
 		i, err := reader.NewInput(strings.NewReader(testDef.input))
 		assert.NoError(t, err)
 
-		tmp, err := reader.NewReader().Read(i)
+		tmp, err := newTestReader().Read(i)
 		assert.Nil(t, tmp)
 		if !assert.Error(t, err, "expected %q to error", testDef.input) {
 			continue
@@ -1528,7 +1541,7 @@ func TestReaderError(t *testing.T) {
 }
 
 func TestReaderDottedList(t *testing.T) {
-	sym := types.NewSymbol
+	sym := testSym
 	list := types.NewList
 	tail := types.NewListTail
 	exprs := func(e ...types.Expression) []types.Expression { return e }
@@ -1567,7 +1580,7 @@ func TestReaderDottedList(t *testing.T) {
 			tail(exprs(sym("C")), sym("D")),
 		)},
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, testDef := range testDefs {
 		i, err := reader.NewInput(strings.NewReader(testDef.input))
 		assert.NoError(t, err)
@@ -1602,7 +1615,7 @@ func TestReaderDotError(t *testing.T) {
 		`(a ..)`,
 		`(a ... b)`,
 	}
-	r := reader.NewReader()
+	r := newTestReader()
 	for _, input := range inputs {
 		i, err := reader.NewInput(strings.NewReader(input))
 		assert.NoError(t, err)
@@ -1619,4 +1632,118 @@ func TestReaderDotError(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = r.Read(i)
 	assert.ErrorContains(t, err, "end of file")
+}
+
+func TestReaderInterning(t *testing.T) {
+	ps := types.NewPackages()
+	r := reader.NewReader(ps)
+	assert.Same(t, ps.User(), r.Package)
+
+	read := func(r *reader.Reader, input string) types.Expression {
+		i, err := reader.NewInput(strings.NewReader(input))
+		assert.NoError(t, err)
+		got, err := r.Read(i)
+		assert.NoError(t, err, "input %q", input)
+		return got
+	}
+
+	// The same name is the same symbol, however it is written
+	a := read(r, "foo")
+	assert.Same(t, a, read(r, "FOO"))
+	assert.Same(t, a, read(r, "|FOO|"))
+	assert.NotSame(t, a, read(r, "|foo|"))
+	assert.Same(t, ps.User(), a.(*types.Symbol).Package())
+	found, _ := ps.User().Find("FOO")
+	assert.Same(t, a, found)
+
+	// A symbol in a list is the same object as the one read alone
+	list := read(r, "(foo)").(*types.Cons)
+	assert.Same(t, a, list.Car())
+
+	// Readers on one set share symbols, and the current package decides where
+	// a new symbol goes
+	other := reader.NewReader(ps)
+	assert.Same(t, a, read(other, "foo"))
+	pkg, err := ps.Make("OTHER", nil, nil)
+	assert.NoError(t, err)
+	other.Package = pkg
+	b := read(other, "foo")
+	assert.NotSame(t, a, b)
+	assert.Same(t, pkg, b.(*types.Symbol).Package())
+
+	// A separate set has separate symbols
+	assert.NotSame(t, a, read(reader.NewReader(types.NewPackages()), "foo"))
+}
+
+func TestReaderNil(t *testing.T) {
+	ps := types.NewPackages()
+	empty, err := ps.Make("EMPTY", nil, nil)
+	assert.NoError(t, err)
+
+	testDefs := []struct {
+		pkg   *types.Package
+		input string
+		isNil bool
+	}{
+		{ps.User(), "nil", true},
+		{ps.User(), "NIL", true},
+		{ps.User(), "()", true},
+		{ps.User(), "t", false},
+		{ps.User(), "|nil|", false},
+		{ps.User(), "nil2", false},
+		{ps.CommonLisp(), "nil", true},
+		// Without the COMMON-LISP symbols, NIL is an ordinary symbol
+		{empty, "nil", false},
+	}
+	for _, testDef := range testDefs {
+		r := reader.NewReader(ps)
+		r.Package = testDef.pkg
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+		got, err := r.Read(i)
+		assert.NoError(t, err)
+		if testDef.isNil {
+			assert.Same(t, types.Nil, got, "input %q", testDef.input)
+		} else {
+			assert.NotSame(t, types.Nil, got, "input %q", testDef.input)
+			assert.Equal(t, types.ExpressionTypeSymbol, got.Type(), "input %q", testDef.input)
+		}
+	}
+
+	// NIL inside a list is Nil, so (a nil) has a Nil element and (a . nil) is (a)
+	r := newTestReader()
+	i, err := reader.NewInput(strings.NewReader("(a nil) (a . nil)"))
+	assert.NoError(t, err)
+	got, err := r.Read(i)
+	assert.NoError(t, err)
+	items, _ := types.ListItems(got)
+	assert.Len(t, items, 2)
+	assert.Same(t, types.Nil, items[1])
+	got, err = r.Read(i)
+	assert.NoError(t, err)
+	items, _ = types.ListItems(got)
+	assert.Len(t, items, 1)
+}
+
+func TestReaderPackageNotInSet(t *testing.T) {
+	foreign := types.NewPackages().User()
+	for name, set := range map[string]func(r *reader.Reader){
+		"nil package":     func(r *reader.Reader) { r.Package = nil },
+		"nil set":         func(r *reader.Reader) { r.Packages = nil },
+		"foreign package": func(r *reader.Reader) { r.Package = foreign },
+	} {
+		r := newTestReader()
+		set(r)
+		for _, input := range []string{"a", "(a)", "#"} {
+			i, err := reader.NewInput(strings.NewReader(input))
+			assert.NoError(t, err)
+			_, err = r.Read(i)
+			assert.ErrorContains(t, err, "current package is not in the package set", "%s: %q", name, input)
+		}
+		// Input with no symbols still reads
+		i, err := reader.NewInput(strings.NewReader(`1 "s"`))
+		assert.NoError(t, err)
+		_, err = r.Read(i)
+		assert.NoError(t, err, name)
+	}
 }
