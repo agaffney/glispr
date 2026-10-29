@@ -1747,3 +1747,108 @@ func TestReaderPackageNotInSet(t *testing.T) {
 		assert.NoError(t, err, name)
 	}
 }
+
+func TestReaderPackageMarkers(t *testing.T) {
+	ps := types.NewPackages()
+	lib, err := ps.Make("LIB", nil, nil)
+	assert.NoError(t, err)
+	exported, _ := lib.Intern("PUB")
+	assert.NoError(t, lib.Export(exported))
+	private, _ := lib.Intern("PRIV")
+	// A lowercase name that case conversion can't reach without an escape
+	lower, _ := lib.Intern("lower")
+	assert.NoError(t, lib.Export(lower))
+	kw, _ := ps.Keyword().Intern("FOO")
+	user, _ := ps.User().Intern("X")
+	clT, _ := ps.CommonLisp().Find("T")
+
+	read := func(input string) (types.Expression, error) {
+		r := reader.NewReader(ps)
+		i, err := reader.NewInput(strings.NewReader(input))
+		assert.NoError(t, err)
+		return r.Read(i)
+	}
+
+	// Symbols that aren't in the table are identified by name and package
+	type sameName struct {
+		name string
+		pkg  *types.Package
+	}
+	valid := []struct {
+		input string
+		want  any
+	}{
+		{"lib:pub", exported},
+		{"LIB:PUB", exported},
+		{"lib::pub", exported},
+		{"lib::priv", private},
+		{"|LIB|:pub", exported},
+		{"lib:|lower|", lower},
+		{":foo", kw},
+		{":FOO", kw},
+		{"keyword:foo", kw},
+		{"keyword::foo", kw},
+		{"cl-user::x", user},
+		{"common-lisp:nil", types.Nil},
+		{"cl:nil", types.Nil},
+		{"cl::nil", types.Nil},
+		{"cl:t", clT},
+		// Escaped and quoted markers are part of the name
+		{`|a:b|`, sameName{"a:b", ps.User()}},
+		{`a\:b`, sameName{"A:B", ps.User()}},
+		{`a\:\:b`, sameName{"A::B", ps.User()}},
+		// Not numbers
+		{":1", sameName{"1", ps.Keyword()}},
+		{"lib::1", sameName{"1", lib}},
+	}
+	for _, tc := range valid {
+		got, err := read(tc.input)
+		assert.NoError(t, err, "input %q", tc.input)
+		if want, ok := tc.want.(sameName); ok {
+			sym, ok := got.(*types.Symbol)
+			if assert.True(t, ok, "input %q", tc.input) {
+				assert.Equal(t, want.name, sym.Name(), "input %q", tc.input)
+				assert.Same(t, want.pkg, sym.Package(), "input %q", tc.input)
+			}
+			continue
+		}
+		assert.Same(t, tc.want, got, "input %q", tc.input)
+	}
+
+	invalid := []struct {
+		input string
+		msg   string
+	}{
+		{"lib:priv", "not external"},
+		{"lib:missing", "not external"},
+		{"keyword:missing", "not external"},
+		{"nope:x", "not found"},
+		{"nope::x", "not found"},
+		{"lib:", "symbol name missing"},
+		{"lib::", "symbol name missing"},
+		{":", "symbol name missing"},
+		{"::", "symbol name missing"},
+		{"::x", "package name missing"},
+		{":::x", "too many package markers"},
+		{"lib:::x", "too many package markers"},
+		{"a:b:c", "too many package markers"},
+		{"a::b:c", "too many package markers"},
+		{"a:b::c", "too many package markers"},
+		{"lib:.", "only of dots"},
+		{"lib:..", "only of dots"},
+		// Inherited from another package is not external in this one
+		{"cl-user:nil", "inherited, not external"},
+	}
+	for _, tc := range invalid {
+		_, err := read(tc.input)
+		assert.ErrorContains(t, err, tc.msg, "input %q", tc.input)
+		var rerr reader.ReaderError
+		assert.ErrorAs(t, err, &rerr, "input %q", tc.input)
+	}
+
+	// The double colon interns, so the symbol is present afterwards
+	_, err = read("lib::tmp")
+	assert.NoError(t, err)
+	_, status := lib.Find("TMP")
+	assert.Equal(t, types.SymbolStatusInternal, status)
+}
