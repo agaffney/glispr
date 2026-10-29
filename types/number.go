@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"math/big"
+	"strconv"
 	"strings"
 )
 
@@ -13,12 +14,9 @@ var ErrDivideByZero = errors.New("division by zero")
 // ErrFloatRange is returned when a float is too large or too small to represent.
 var ErrFloatRange = errors.New("floating point number out of range")
 
-// NewNumberFromString parses val as a number in the given radix. It returns
-// nil if val is not a number.
-func NewNumberFromString(val string, radix int) *Number {
-	num, _ := ParseNumber(val, radix)
-	return num
-}
+// ErrUnknownFloatFormat is returned when a float needs the default format and
+// that is not single or double.
+var ErrUnknownFloatFormat = errors.New("unknown default float format")
 
 // ParseNumber parses val as a number following the syntax of CLHS 2.3.1.1, with
 // integers and ratios in the given radix (2 to 36). It returns nil without an
@@ -34,9 +32,12 @@ func NewNumberFromString(val string, radix int) *Number {
 //     as 4/2, is an integer.
 //   - A float is always decimal. It is either digits with a decimal point and
 //     digits after it, or digits with an optional decimal point and fraction and
-//     an exponent. The exponent is a marker (e, s, f, d, or l) with an optional
-//     sign and digits.
-func ParseNumber(val string, radix int) (*Number, error) {
+//     an exponent. The exponent is a marker with an optional sign and digits.
+//     The marker picks the format: s and f are single, d and l are double, and e
+//     uses defaultFormat, as does a float with no exponent. A float that needs
+//     defaultFormat when it is not single or double is an error
+//     (ErrUnknownFloatFormat).
+func ParseNumber(val string, radix int, defaultFormat FloatFormat) (*Number, error) {
 	if num, err := ParseRational(val, radix); num != nil || err != nil {
 		return num, err
 	}
@@ -44,7 +45,7 @@ func ParseNumber(val string, radix int) (*Number, error) {
 	if !ok || radix < 2 || radix > 36 {
 		return nil, nil
 	}
-	return parseFloat(sign, rest)
+	return parseFloat(sign, rest, defaultFormat)
 }
 
 // ParseRational is like ParseNumber, but only accepts integers and ratios.
@@ -137,7 +138,7 @@ func parseRatio(numer, denom string, radix int) (*Number, error) {
 
 // parseFloat parses the unsigned decimal float syntax in rest, or returns nil
 // if rest is not a float.
-func parseFloat(sign, rest string) (*Number, error) {
+func parseFloat(sign, rest string, defaultFormat FloatFormat) (*Number, error) {
 	// Scan decimal digits, starting at pos
 	scan := func(pos int) int {
 		for pos < len(rest) && rest[pos] >= '0' && rest[pos] <= '9' {
@@ -157,8 +158,15 @@ func parseFloat(sign, rest string) (*Number, error) {
 	}
 	hasExp := false
 	expPart := ""
+	format := defaultFormat
 	if pos < len(rest) && strings.ContainsRune("esfdlESFDL", rune(rest[pos])) {
 		hasExp = true
+		switch rest[pos] {
+		case 's', 'S', 'f', 'F':
+			format = FloatFormatSingle
+		case 'd', 'D', 'l', 'L':
+			format = FloatFormatDouble
+		}
 		pos++
 		start := pos
 		if pos < len(rest) && (rest[pos] == '+' || rest[pos] == '-') {
@@ -178,30 +186,26 @@ func parseFloat(sign, rest string) (*Number, error) {
 	if (!hasDot || fracPart == "") && (intPart == "" || !hasExp) {
 		return nil, nil
 	}
-	// TODO: use the exponent marker to pick the float format
 	text := sign + cmp.Or(intPart, "0") + "." + cmp.Or(fracPart, "0")
 	if hasExp {
 		text += "e" + expPart
 	}
-	// Zero is zero no matter how large the exponent is
-	zeroMantissa := strings.Trim(intPart+fracPart, "0") == ""
-	if zeroMantissa {
-		f := new(big.Float).SetPrec(53)
-		if sign == "-" {
-			f.Neg(f)
-		}
-		return NewNumberFloat(f), nil
+	if format.Precision() == 0 {
+		return nil, ErrUnknownFloatFormat
 	}
-	// Set the precision first so the value is rounded once, to the nearest
-	// float with this precision. The syntax is valid by now, so the only way for
-	// this to fail is an exponent too large for big.Float.
-	f, ok := new(big.Float).SetPrec(53).SetString(text) // This precision is the same you get with big.NewFloat(n)
-	if !ok || f.IsInf() {
+	bits := 64
+	if format == FloatFormatSingle {
+		bits = 32
+	}
+	// strconv rounds once, to the nearest float of this size
+	f, err := strconv.ParseFloat(text, bits)
+	if err != nil {
+		// The syntax is valid by now, so this is a magnitude too large
 		return nil, ErrFloatRange
 	}
 	// A nonzero number that rounds to zero is too small to represent
-	if f.Sign() == 0 {
+	if f == 0 && strings.Trim(intPart+fracPart, "0") != "" {
 		return nil, ErrFloatRange
 	}
-	return NewNumberFloat(f), nil
+	return NewNumberFloat(new(big.Float).SetFloat64(f), format), nil
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/agaffney/glispr/types"
 )
 
-func TestNewNumberFromString(t *testing.T) {
+func TestParseNumber(t *testing.T) {
 	testDefs := []struct {
 		val         string
 		radix       int
@@ -39,27 +39,23 @@ func TestNewNumberFromString(t *testing.T) {
 		{val: "120/21", radix: 3, expectedNum: types.NewNumberRatio(big.NewRat(15, 7))},
 		{val: "bc/ad", radix: 16, expectedNum: types.NewNumberRatio(big.NewRat(188, 173))},
 		{val: "FADED/FACADE", radix: 16, expectedNum: types.NewNumberRatio(big.NewRat(1027565, 16435934))},
-		{val: "0.0", radix: 10, expectedNum: types.NewNumberFloat(big.NewFloat(0.0))},
-		{val: "0E0", radix: 10, expectedNum: types.NewNumberFloat(big.NewFloat(0.0))},
-		{val: "3.1415926535897932384", radix: 10, expectedNum: types.NewNumberFloat(big.NewFloat(3.1415926535897932384e0))},
+		{val: "0.0", radix: 10, expectedNum: types.NewNumberFloat(big.NewFloat(0.0), types.FloatFormatDouble)},
+		{val: "0E0", radix: 10, expectedNum: types.NewNumberFloat(big.NewFloat(0.0), types.FloatFormatDouble)},
+		{val: "3.1415926535897932384", radix: 10, expectedNum: types.NewNumberFloat(big.NewFloat(3.1415926535897932384e0), types.FloatFormatDouble)},
 	}
 	for _, testDef := range testDefs {
-		tmp := types.NewNumberFromString(testDef.val, testDef.radix)
+		tmp, err := types.ParseNumber(testDef.val, testDef.radix, types.FloatFormatDouble)
+		if err != nil {
+			t.Errorf("ParseNumber(%q, %d) returned an error: %s", testDef.val, testDef.radix, err)
+			continue
+		}
 		if tmp == nil {
-			t.Errorf("NewNumberFromString(%q, %d) returned nil", testDef.val, testDef.radix)
+			t.Errorf("ParseNumber(%q, %d) returned nil", testDef.val, testDef.radix)
 			continue
 		}
 		if !tmp.Equal(testDef.expectedNum) {
-			t.Errorf("NewNumberFromString(%q, %d) does not match expected value\n\n  Expected: %s\n  Actual: %s", testDef.val, testDef.radix, testDef.expectedNum.String(), tmp.String())
+			t.Errorf("ParseNumber(%q, %d) does not match expected value\n\n  Expected: %s\n  Actual: %s", testDef.val, testDef.radix, testDef.expectedNum.String(), tmp.String())
 		}
-	}
-}
-
-func TestNewNumberFromStringZeroDenominator(t *testing.T) {
-	for _, val := range []string{"1/0", "-1/0", "0/0"} {
-		assert.NotPanics(t, func() {
-			assert.Nil(t, types.NewNumberFromString(val, 10), "expected %q to not be a number", val)
-		})
 	}
 }
 
@@ -90,7 +86,7 @@ func TestParseNumberIntegers(t *testing.T) {
 		{"1e5", 36, 1805},
 	}
 	for _, testDef := range testDefs {
-		got, err := types.ParseNumber(testDef.val, testDef.radix)
+		got, err := types.ParseNumber(testDef.val, testDef.radix, types.FloatFormatDouble)
 		assert.NoError(t, err, "ParseNumber(%q, %d)", testDef.val, testDef.radix)
 		if !assert.NotNil(t, got, "ParseNumber(%q, %d) returned nil", testDef.val, testDef.radix) {
 			continue
@@ -114,7 +110,7 @@ func TestParseNumberRatios(t *testing.T) {
 		{"Z/Y", 36, big.NewRat(35, 34)},
 	}
 	for _, testDef := range testDefs {
-		got, err := types.ParseNumber(testDef.val, testDef.radix)
+		got, err := types.ParseNumber(testDef.val, testDef.radix, types.FloatFormatDouble)
 		assert.NoError(t, err, "ParseNumber(%q, %d)", testDef.val, testDef.radix)
 		if !assert.NotNil(t, got, "ParseNumber(%q, %d) returned nil", testDef.val, testDef.radix) {
 			continue
@@ -160,7 +156,7 @@ func TestParseNumberFloats(t *testing.T) {
 		{"1.5", 2, 1.5},
 	}
 	for _, testDef := range testDefs {
-		got, err := types.ParseNumber(testDef.val, testDef.radix)
+		got, err := types.ParseNumber(testDef.val, testDef.radix, types.FloatFormatDouble)
 		assert.NoError(t, err, "ParseNumber(%q, %d)", testDef.val, testDef.radix)
 		if !assert.NotNil(t, got, "ParseNumber(%q, %d) returned nil", testDef.val, testDef.radix) {
 			continue
@@ -240,7 +236,7 @@ func TestParseNumberNotANumber(t *testing.T) {
 	}
 	for _, testDef := range testDefs {
 		assert.NotPanics(t, func() {
-			got, err := types.ParseNumber(testDef.val, testDef.radix)
+			got, err := types.ParseNumber(testDef.val, testDef.radix, types.FloatFormatDouble)
 			assert.NoError(t, err, "ParseNumber(%q, %d)", testDef.val, testDef.radix)
 			assert.Nil(t, got, "expected %q (radix %d) to not be a number, got %v", testDef.val, testDef.radix, got)
 		})
@@ -249,11 +245,11 @@ func TestParseNumberNotANumber(t *testing.T) {
 
 func TestParseNumberDivideByZero(t *testing.T) {
 	for _, val := range []string{"1/0", "-1/0", "0/0", "+5/00"} {
-		got, err := types.ParseNumber(val, 10)
+		got, err := types.ParseNumber(val, 10, types.FloatFormatDouble)
 		assert.ErrorIs(t, err, types.ErrDivideByZero, "ParseNumber(%q)", val)
 		assert.Nil(t, got)
 	}
-	got, err := types.ParseNumber("1/0", 2)
+	got, err := types.ParseNumber("1/0", 2, types.FloatFormatDouble)
 	assert.ErrorIs(t, err, types.ErrDivideByZero)
 	assert.Nil(t, got)
 }
@@ -271,14 +267,14 @@ func TestParseNumberFloatRange(t *testing.T) {
 		"1e-99999999999999999999",
 		"0.5e-99999999999999999999",
 	} {
-		got, err := types.ParseNumber(val, 10)
+		got, err := types.ParseNumber(val, 10, types.FloatFormatDouble)
 		assert.ErrorIs(t, err, types.ErrFloatRange, "ParseNumber(%q)", val)
 		assert.Nil(t, got, "ParseNumber(%q)", val)
 	}
 
 	// A zero mantissa is zero for any exponent
 	for _, val := range []string{"0e0", "0.0e999999999", "0e99999999999999999999", "-0.0e-99999999999999999999", ".0e5"} {
-		got, err := types.ParseNumber(val, 10)
+		got, err := types.ParseNumber(val, 10, types.FloatFormatDouble)
 		assert.NoError(t, err, "ParseNumber(%q)", val)
 		if assert.NotNil(t, got, "ParseNumber(%q)", val) {
 			assert.Equal(t, 0, got.Float().Sign(), "ParseNumber(%q)", val)
@@ -287,7 +283,7 @@ func TestParseNumberFloatRange(t *testing.T) {
 	}
 
 	// Leading zeros in the exponent don't matter
-	got, err := types.ParseNumber("1e"+strings.Repeat("0", 100000)+"5", 10)
+	got, err := types.ParseNumber("1e"+strings.Repeat("0", 100000)+"5", 10, types.FloatFormatDouble)
 	assert.NoError(t, err)
 	if assert.NotNil(t, got) {
 		f, _ := got.Float().Float64()
@@ -298,20 +294,28 @@ func TestParseNumberFloatRange(t *testing.T) {
 func TestParseNumberLongDigits(t *testing.T) {
 	digits := strings.Repeat("9", 100000)
 
-	got, err := types.ParseNumber(digits, 10)
+	got, err := types.ParseNumber(digits, 10, types.FloatFormatDouble)
 	assert.NoError(t, err)
 	if assert.NotNil(t, got) {
 		assert.Equal(t, types.NumberTypeInteger, got.NumType())
 		assert.Len(t, got.Int().String(), 100000)
 	}
 
-	got, err = types.ParseNumber(digits+".5", 10)
+	// Too large for a float, however many digits it has
+	got, err = types.ParseNumber(digits+".5", 10, types.FloatFormatDouble)
+	assert.ErrorIs(t, err, types.ErrFloatRange)
+	assert.Nil(t, got)
+
+	// A long mantissa in range, with the digits before and after the point
+	got, err = types.ParseNumber("0."+digits, 10, types.FloatFormatDouble)
 	assert.NoError(t, err)
 	if assert.NotNil(t, got) {
 		assert.Equal(t, types.NumberTypeFloat, got.NumType())
+		f, _ := got.Float().Float64()
+		assert.Equal(t, 1.0, f)
 	}
 
-	got, err = types.ParseNumber("1."+digits+"e5", 10)
+	got, err = types.ParseNumber("1."+digits+"e5", 10, types.FloatFormatDouble)
 	assert.NoError(t, err)
 	if assert.NotNil(t, got) {
 		assert.Equal(t, types.NumberTypeFloat, got.NumType())
@@ -322,7 +326,7 @@ func TestParseNumberLongDigits(t *testing.T) {
 // strconv produces for a float64.
 func TestParseNumberFloatRounding(t *testing.T) {
 	for _, val := range []string{"0.1", "0.2", "0.3", "1e-5", "6.02e23", "3.141592653589793", "2.2250738585072014e-308", "1.7976931348623157e308"} {
-		got, err := types.ParseNumber(val, 10)
+		got, err := types.ParseNumber(val, 10, types.FloatFormatDouble)
 		assert.NoError(t, err, "ParseNumber(%q)", val)
 		want, _ := strconv.ParseFloat(val, 64)
 		if assert.NotNil(t, got, "ParseNumber(%q)", val) {
@@ -341,7 +345,7 @@ func TestParseNumberFloatRounding(t *testing.T) {
 			sb.WriteByte(byte('0' + rng.Intn(10)))
 		}
 		val := sb.String()
-		got, err := types.ParseNumber(val, 10)
+		got, err := types.ParseNumber(val, 10, types.FloatFormatDouble)
 		if !assert.NoError(t, err, "ParseNumber(%q)", val) || !assert.NotNil(t, got, "ParseNumber(%q)", val) {
 			continue
 		}
@@ -388,4 +392,152 @@ func TestParseRational(t *testing.T) {
 	got, err := types.ParseRational("1/0", 10)
 	assert.ErrorIs(t, err, types.ErrDivideByZero)
 	assert.Nil(t, got)
+}
+
+func TestParseNumberFloatFormats(t *testing.T) {
+	const (
+		single = types.FloatFormatSingle
+		double = types.FloatFormatDouble
+	)
+	testDefs := []struct {
+		val        string
+		def        types.FloatFormat
+		wantFormat types.FloatFormat
+		want       float64 // the value as a float64, already rounded to the format
+	}{
+		// No exponent, or the marker e, use the default
+		{"0.1", single, single, float64(float32(0.1))},
+		{"0.1", double, double, 0.1},
+		{"0.1e0", single, single, float64(float32(0.1))},
+		{"0.1E0", double, double, 0.1},
+		{"1.e1", single, single, 10},
+		// s and f are single, whatever the default
+		{"0.1s0", double, single, float64(float32(0.1))},
+		{"0.1S0", double, single, float64(float32(0.1))},
+		{"0.1f0", double, single, float64(float32(0.1))},
+		{"0.1F0", single, single, float64(float32(0.1))},
+		// d and l are double, whatever the default
+		{"0.1d0", single, double, 0.1},
+		{"0.1D0", single, double, 0.1},
+		{"0.1l0", single, double, 0.1},
+		{"0.1L0", double, double, 0.1},
+		{"-2.5d-1", single, double, -0.25},
+		// Rounded once to the format, not to double first
+		{"16777217f0", single, single, 16777216},
+		{"16777217.0d0", single, double, 16777217},
+		{"1.00000017881393432617187500000001f0", single, single, float64(float32(1.0000002))},
+	}
+	for _, testDef := range testDefs {
+		got, err := types.ParseNumber(testDef.val, 10, testDef.def)
+		assert.NoError(t, err, "ParseNumber(%q, 10, %s)", testDef.val, testDef.def)
+		if !assert.NotNil(t, got, "ParseNumber(%q, 10, %s)", testDef.val, testDef.def) {
+			continue
+		}
+		assert.Equal(t, types.NumberTypeFloat, got.NumType(), "type of %q", testDef.val)
+		assert.Equal(t, testDef.wantFormat, got.Format(), "format of %q with default %s", testDef.val, testDef.def)
+		assert.Equal(t, testDef.wantFormat.Precision(), got.Float().Prec(), "precision of %q", testDef.val)
+		f, _ := got.Float().Float64()
+		assert.Equal(t, testDef.want, f, "value of %q with default %s", testDef.val, testDef.def)
+	}
+}
+
+func TestParseNumberFloatFormatRange(t *testing.T) {
+	const (
+		single = types.FloatFormatSingle
+		double = types.FloatFormatDouble
+	)
+	valid := []struct {
+		val string
+		def types.FloatFormat
+	}{
+		{"3.4028235e38", single},
+		{"3.4028235f38", double},
+		{"1e-45", single},   // the smallest single float is a denormal
+		{"1.5e-45", single}, // rounds to it
+		{"1.7976931348623157e308", double},
+		{"1d39", single},     // too large for single, but d is double
+		{"4.9e-324", double}, // the smallest double float is a denormal
+		{"0f0", single},
+		{"0.0e99999999999", single},
+	}
+	for _, tc := range valid {
+		got, err := types.ParseNumber(tc.val, 10, tc.def)
+		assert.NoError(t, err, "ParseNumber(%q, 10, %s)", tc.val, tc.def)
+		assert.NotNil(t, got, "ParseNumber(%q, 10, %s)", tc.val, tc.def)
+	}
+
+	outOfRange := []struct {
+		val string
+		def types.FloatFormat
+	}{
+		{"3.5e38", single},
+		{"1e39", single},
+		{"-1f39", double}, // f is single, even with a double default
+		{"1.8e308", double},
+		{"1d309", single},
+		{"1e-46", single},
+		{"1f-46", double},
+		{"1e-400", double},
+		{"1d-325", single},
+	}
+	for _, tc := range outOfRange {
+		got, err := types.ParseNumber(tc.val, 10, tc.def)
+		assert.ErrorIs(t, err, types.ErrFloatRange, "ParseNumber(%q, 10, %s)", tc.val, tc.def)
+		assert.Nil(t, got, "ParseNumber(%q, 10, %s)", tc.val, tc.def)
+	}
+}
+
+func TestParseNumberUnknownDefaultFormat(t *testing.T) {
+	// Only floats that need the default care about it
+	for _, val := range []string{"1", "1/2", "1.", "1.5d0", "1.5f0", "abc"} {
+		assert.NotPanics(t, func() { _, _ = types.ParseNumber(val, 10, types.FloatFormatNone) }, val)
+	}
+	got, err := types.ParseNumber("1.5d0", 10, types.FloatFormatNone)
+	assert.NoError(t, err)
+	assert.NotNil(t, got)
+
+	for _, val := range []string{"1.5", "1e5", "1.5e0", ".5"} {
+		for _, format := range []types.FloatFormat{types.FloatFormatNone, types.FloatFormat(99)} {
+			got, err := types.ParseNumber(val, 10, format)
+			assert.ErrorIs(t, err, types.ErrUnknownFloatFormat, "ParseNumber(%q, 10, %d)", val, format)
+			assert.Nil(t, got)
+		}
+	}
+}
+
+func TestParseNumberDenormalsAndNegativeZero(t *testing.T) {
+	// Denormals are valid, with the precision of their format
+	denormals := []struct {
+		val  string
+		def  types.FloatFormat
+		want float64
+	}{
+		{"1e-40", types.FloatFormatSingle, float64(float32(1e-40))},
+		{"1e-45", types.FloatFormatSingle, float64(float32(1e-45))},
+		{"1.2f-40", types.FloatFormatDouble, float64(float32(1.2e-40))},
+		{"1e-310", types.FloatFormatDouble, 1e-310},
+		{"4.9e-324", types.FloatFormatDouble, 5e-324},
+		{"1d-320", types.FloatFormatSingle, 1e-320},
+	}
+	for _, tc := range denormals {
+		got, err := types.ParseNumber(tc.val, 10, tc.def)
+		assert.NoError(t, err, "ParseNumber(%q, 10, %s)", tc.val, tc.def)
+		if assert.NotNil(t, got, "ParseNumber(%q, 10, %s)", tc.val, tc.def) {
+			f, _ := got.Float().Float64()
+			assert.Equal(t, tc.want, f, "ParseNumber(%q, 10, %s)", tc.val, tc.def)
+			assert.NotEqual(t, 0.0, f, "ParseNumber(%q, 10, %s) underflowed", tc.val, tc.def)
+		}
+	}
+
+	// Negative zero keeps its sign, in either format and with any exponent
+	for _, val := range []string{"-0.0", "-0.0f0", "-0.0d0", "-0e5", "-.0", "-0.0e99999999999", "-0f-99999999999"} {
+		for _, def := range []types.FloatFormat{types.FloatFormatSingle, types.FloatFormatDouble} {
+			got, err := types.ParseNumber(val, 10, def)
+			assert.NoError(t, err, "ParseNumber(%q, 10, %s)", val, def)
+			if assert.NotNil(t, got, "ParseNumber(%q, 10, %s)", val, def) {
+				assert.Equal(t, 0, got.Float().Sign(), "ParseNumber(%q, 10, %s)", val, def)
+				assert.True(t, got.Float().Signbit(), "sign of ParseNumber(%q, 10, %s)", val, def)
+			}
+		}
+	}
 }

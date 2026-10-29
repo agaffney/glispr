@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -197,10 +198,41 @@ const (
 	NumberTypeRatio
 )
 
+// FloatFormat is the format of a float: single or double precision.
+type FloatFormat int
+
+const (
+	FloatFormatNone FloatFormat = iota
+	FloatFormatSingle
+	FloatFormatDouble
+)
+
+// Precision returns the size of the mantissa in bits, or 0 for an unknown format.
+func (f FloatFormat) Precision() uint {
+	switch f {
+	case FloatFormatSingle:
+		return 24
+	case FloatFormatDouble:
+		return 53
+	}
+	return 0
+}
+
+func (f FloatFormat) String() string {
+	switch f {
+	case FloatFormatSingle:
+		return "single-float"
+	case FloatFormatDouble:
+		return "double-float"
+	}
+	return "<unknown>"
+}
+
 type Number struct {
 	typ      NumberType
 	intVal   *big.Int
 	floatVal *big.Float
+	format   FloatFormat
 	ratVal   *big.Rat
 }
 
@@ -211,10 +243,21 @@ func NewNumberInteger(intVal *big.Int) *Number {
 	}
 }
 
-func NewNumberFloat(floatVal *big.Float) *Number {
+// NewNumberFloat returns a float in the given format. The value is rounded to
+// the precision of the format. It panics if format is not single or double.
+//
+// The value is stored with the precision of the format even when it is a
+// denormal, which has fewer significant bits. That doesn't change the value, but
+// any arithmetic on floats should build its results with this function so that
+// the format and precision stay consistent.
+func NewNumberFloat(floatVal *big.Float, format FloatFormat) *Number {
+	if format.Precision() == 0 {
+		panic("types: NewNumberFloat called with unknown float format")
+	}
 	return &Number{
 		typ:      NumberTypeFloat,
-		floatVal: new(big.Float).Set(floatVal),
+		floatVal: new(big.Float).SetPrec(format.Precision()).Set(floatVal),
+		format:   format,
 	}
 }
 
@@ -229,12 +272,38 @@ func (Number) Type() ExpressionType { return ExpressionTypeNumber }
 
 func (n Number) NumType() NumberType { return n.typ }
 
-func (n Number) Int() *big.Int { return n.intVal }
+// Int returns a copy of the value of an integer, or nil for other numbers.
+func (n Number) Int() *big.Int {
+	if n.intVal == nil {
+		return nil
+	}
+	return new(big.Int).Set(n.intVal)
+}
 
-func (n Number) Float() *big.Float { return n.floatVal }
+// Float returns a copy of the value of a float, or nil for other numbers. The
+// copy keeps the precision of the format.
+func (n Number) Float() *big.Float {
+	if n.floatVal == nil {
+		return nil
+	}
+	return new(big.Float).Copy(n.floatVal)
+}
 
-func (n Number) Rat() *big.Rat { return n.ratVal }
+// Format returns the format of a float, or FloatFormatNone for other numbers.
+func (n Number) Format() FloatFormat { return n.format }
 
+// Rat returns a copy of the value of a ratio, or nil for other numbers.
+func (n Number) Rat() *big.Rat {
+	if n.ratVal == nil {
+		return nil
+	}
+	return new(big.Rat).Set(n.ratVal)
+}
+
+// Equal reports whether n and other are the same number, like eql in Common
+// Lisp: they must have the same type, which for floats includes the format, and
+// the same value. So 1.0f0 and 1.0d0 are not equal here, and neither are 1 and
+// 1.0. It is not the numeric comparison done by =.
 func (n Number) Equal(other *Number) bool {
 	if other.typ != n.typ {
 		return false
@@ -243,7 +312,7 @@ func (n Number) Equal(other *Number) bool {
 	case NumberTypeInteger:
 		return n.intVal.Cmp(other.intVal) == 0
 	case NumberTypeFloat:
-		return n.floatVal.Cmp(other.floatVal) == 0
+		return n.format == other.format && n.floatVal.Cmp(other.floatVal) == 0
 	case NumberTypeRatio:
 		return n.ratVal.Cmp(other.ratVal) == 0
 	}
@@ -255,11 +324,34 @@ func (n Number) String() string {
 	case NumberTypeInteger:
 		return n.intVal.String()
 	case NumberTypeFloat:
-		return n.floatVal.String()
+		return n.floatString()
 	case NumberTypeRatio:
 		return n.ratVal.String()
 	}
 	return "<unknown>"
+}
+
+// floatString formats a float with the fewest digits that read back as the same
+// value, and always with an exponent marker for its format: f for single and d
+// for double. Reading it back gives an equal number whatever the default format
+// is.
+func (n Number) floatString() string {
+	f, _ := n.floatVal.Float64()
+	bits, marker := 64, "d"
+	if n.format == FloatFormatSingle {
+		bits, marker = 32, "f"
+	}
+	text := strconv.FormatFloat(f, 'g', -1, bits)
+	mantissa, exp, hasExp := strings.Cut(text, "e")
+	if !strings.Contains(mantissa, ".") {
+		mantissa += ".0"
+	}
+	if !hasExp {
+		return mantissa + marker + "0"
+	}
+	// Drop the sign and leading zeros that strconv adds to a positive exponent
+	expNum, _ := strconv.Atoi(exp)
+	return mantissa + marker + strconv.Itoa(expNum)
 }
 
 type Symbol struct {

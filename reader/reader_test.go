@@ -2,6 +2,7 @@ package reader_test
 
 import (
 	"errors"
+	"math"
 	"math/big"
 	"strings"
 	"testing"
@@ -10,6 +11,16 @@ import (
 	"github.com/agaffney/glispr/types"
 	"github.com/stretchr/testify/assert"
 )
+
+// singleFloat and doubleFloat return the float that reading f in that format
+// should produce.
+func singleFloat(f float64) *types.Number {
+	return types.NewNumberFloat(big.NewFloat(float64(float32(f))), types.FloatFormatSingle)
+}
+
+func doubleFloat(f float64) *types.Number {
+	return types.NewNumberFloat(big.NewFloat(f), types.FloatFormatDouble)
+}
 
 func TestReaderString(t *testing.T) {
 	testDefs := []struct {
@@ -611,43 +622,43 @@ func TestReaderNumber(t *testing.T) {
 		},
 		{
 			input:       `0.0`,
-			expectedNum: types.NewNumberFloat(big.NewFloat(0.0)),
+			expectedNum: singleFloat(0.0),
 		},
 		{
 			input:       `0E0`,
-			expectedNum: types.NewNumberFloat(big.NewFloat(0.0)),
+			expectedNum: singleFloat(0.0),
 		},
 		{
 			input:       `-.0`,
-			expectedNum: types.NewNumberFloat(new(big.Float).Neg(big.NewFloat(0.0))),
+			expectedNum: singleFloat(math.Copysign(0, -1)),
 		},
 		{
 			input:       `0.0s0`,
-			expectedNum: types.NewNumberFloat(big.NewFloat(0.0)),
+			expectedNum: singleFloat(0.0),
 		},
 		{
 			input:       `0s0`,
-			expectedNum: types.NewNumberFloat(big.NewFloat(0.0)),
+			expectedNum: singleFloat(0.0),
 		},
 		{
 			input:       `3.1415926535897932384d0`,
-			expectedNum: types.NewNumberFloat(big.NewFloat(3.1415926535897932384e0)),
+			expectedNum: doubleFloat(3.1415926535897932384e0),
 		},
 		{
 			input:       `6.02E+23`,
-			expectedNum: types.NewNumberFloat(big.NewFloat(6.02e+23)),
+			expectedNum: singleFloat(6.02e+23),
 		},
 		{
 			input:       `602E+21`,
-			expectedNum: types.NewNumberFloat(big.NewFloat(602e+21)),
+			expectedNum: singleFloat(602e+21),
 		},
 		{
 			input:       `3.010299957f-1`,
-			expectedNum: types.NewNumberFloat(big.NewFloat(3.010299957e-1)),
+			expectedNum: singleFloat(3.010299957e-1),
 		},
 		{
 			input:       `-0.000000001s9`,
-			expectedNum: types.NewNumberFloat(big.NewFloat(-0.000000001e9)),
+			expectedNum: singleFloat(-0.000000001e9),
 		},
 	}
 	r := reader.NewReader()
@@ -669,6 +680,90 @@ func TestReaderNumber(t *testing.T) {
 		if !tmpNum.Equal(testDef.expectedNum) {
 			t.Errorf("number does not match expected value for input: %s\n\n  Expected: %s\n  Actual: %s", testDef.input, testDef.expectedNum.String(), tmpNum.String())
 		}
+	}
+}
+
+func TestReaderFloatFormat(t *testing.T) {
+	testDefs := []struct {
+		input   string
+		def     types.FloatFormat
+		want    *types.Number
+		wantStr string
+	}{
+		// Without a marker, or with e, the default format is used
+		{`0.1`, types.FloatFormatSingle, singleFloat(0.1), ""},
+		{`0.1`, types.FloatFormatDouble, doubleFloat(0.1), ""},
+		{`1e5`, types.FloatFormatSingle, singleFloat(1e5), ""},
+		{`1E5`, types.FloatFormatDouble, doubleFloat(1e5), ""},
+		{`.1e0`, types.FloatFormatSingle, singleFloat(0.1), ""},
+		{`.1e0`, types.FloatFormatDouble, doubleFloat(0.1), ""},
+		// s and f are always single, d and l are always double
+		{`0.1s0`, types.FloatFormatDouble, singleFloat(0.1), ""},
+		{`0.1S0`, types.FloatFormatDouble, singleFloat(0.1), ""},
+		{`0.1f0`, types.FloatFormatDouble, singleFloat(0.1), ""},
+		{`0.1F0`, types.FloatFormatDouble, singleFloat(0.1), ""},
+		{`0.1d0`, types.FloatFormatSingle, doubleFloat(0.1), ""},
+		{`0.1D0`, types.FloatFormatSingle, doubleFloat(0.1), ""},
+		{`0.1l0`, types.FloatFormatSingle, doubleFloat(0.1), ""},
+		{`0.1L0`, types.FloatFormatSingle, doubleFloat(0.1), ""},
+		{`1d0`, types.FloatFormatSingle, doubleFloat(1), ""},
+		{`-1.5f2`, types.FloatFormatDouble, singleFloat(-150), ""},
+		// Within a list
+		{`(1.5d0)`, types.FloatFormatSingle, nil, "(1.5)"},
+	}
+	for _, testDef := range testDefs {
+		r := reader.NewReader()
+		r.DefaultFloatFormat = testDef.def
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		if !assert.NoError(t, err, "unexpected error for %q", testDef.input) {
+			continue
+		}
+		if testDef.want == nil {
+			items, ok := types.ListItems(tmp)
+			if assert.True(t, ok) && assert.Len(t, items, 1) {
+				assert.Equal(t, doubleFloat(1.5), items[0])
+			}
+			continue
+		}
+		assert.Equal(t, testDef.want, tmp, "wrong result for %q with default %s", testDef.input, testDef.def)
+	}
+
+	// The standard default is single-float
+	assert.Equal(t, types.FloatFormatSingle, reader.NewReader().DefaultFloatFormat)
+}
+
+func TestReaderUnknownFloatFormat(t *testing.T) {
+	r := reader.NewReader()
+	r.DefaultFloatFormat = types.FloatFormatNone
+
+	// Floats that need the default are a reader error, not a panic
+	for _, input := range []string{"1.5", "1e5", "(a 1.5e0)", ".5"} {
+		i, err := reader.NewInput(strings.NewReader(input))
+		assert.NoError(t, err)
+		var tmp types.Expression
+		assert.NotPanics(t, func() { tmp, err = r.Read(i) }, input)
+		var readerErr reader.ReaderError
+		assert.True(t, errors.As(err, &readerErr), "expected ReaderError for %q", input)
+		assert.ErrorContains(t, err, "unknown default float format", input)
+		assert.Nil(t, tmp)
+	}
+
+	// Everything else still reads
+	for input, want := range map[string]types.Expression{
+		"1":     types.NewNumberInteger(big.NewInt(1)),
+		"1/2":   types.NewNumberRatio(big.NewRat(1, 2)),
+		"1.5d0": doubleFloat(1.5),
+		"1.5f0": singleFloat(1.5),
+		"a":     types.NewSymbol("A"),
+	} {
+		i, err := reader.NewInput(strings.NewReader(input))
+		assert.NoError(t, err)
+		got, err := r.Read(i)
+		assert.NoError(t, err, input)
+		assert.Equal(t, want, got, input)
 	}
 }
 
@@ -996,6 +1091,11 @@ func TestReaderError(t *testing.T) {
 		{input: "1e999999999", wantLine: 1, wantOffset: 11},
 		{input: "(1e-999999999 a)", wantLine: 1, wantOffset: 13},
 		{input: "1e99999999999999999999", wantLine: 1, wantOffset: 22},
+		// The range depends on the format, which is single by default
+		{input: "3.5e38", wantLine: 1, wantOffset: 6},
+		{input: "1f39", wantLine: 1, wantOffset: 4},
+		{input: "1e-46", wantLine: 1, wantOffset: 5},
+		{input: "1d309", wantLine: 1, wantOffset: 5},
 		{input: "#p", wantLine: 1, wantOffset: 2},
 		{input: "\n#p", wantLine: 2, wantOffset: 2},
 		{input: "#1r0", wantLine: 1, wantOffset: 3},
@@ -1039,7 +1139,7 @@ func TestReaderDottedList(t *testing.T) {
 		// Dots inside larger tokens are not the dot
 		{`(a .b)`, list(exprs(sym("A"), sym(".B")))},
 		{`(a. b)`, list(exprs(sym("A."), sym("B")))},
-		{`(a .5 b)`, list(exprs(sym("A"), types.NewNumberFloat(big.NewFloat(0.5)), sym("B")))},
+		{`(a .5 b)`, list(exprs(sym("A"), singleFloat(0.5), sym("B")))},
 		// Escaped dots are symbols
 		{`(a \. b)`, list(exprs(sym("A"), sym("."), sym("B")))},
 		{`(a |.| b)`, list(exprs(sym("A"), sym("."), sym("B")))},
