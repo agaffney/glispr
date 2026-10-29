@@ -90,25 +90,121 @@ func (r *Reader) finishToken(i *Input, tok *token) (readResult, error) {
 			return readResult{expr: tmpNum, tok: tok}, nil
 		}
 	}
-	expr, err := r.intern(i, r.caseConvert(tok))
+	expr, err := r.readSymbol(i, tok)
 	if err != nil {
 		return readResult{}, err
 	}
 	return readResult{expr: expr, tok: tok}, nil
 }
 
-// intern returns the symbol with the given name in the current package, except
-// that COMMON-LISP:NIL is the object Nil, not a symbol. It is an error if the
-// current package is not in the package set.
+// readSymbol converts a token that is not a number into a symbol (CLHS 2.3.5).
+// Its unescaped package markers pick the package:
+//
+//   - name interns in the current package.
+//   - :name interns in KEYWORD.
+//   - pkg:name is the external symbol name of pkg, which is an error if there is
+//     none. That includes KEYWORD, so keyword:name must already exist, unlike
+//     the shorthand :name.
+//   - pkg::name interns in pkg.
+//
+// The package name and the symbol name are case converted separately.
+func (r *Reader) readSymbol(i *Input, tok *token) (types.Expression, error) {
+	if err := r.checkPackage(i); err != nil {
+		return nil, err
+	}
+	// The markers must be one run of one or two characters, found by the
+	// traits so that an escaped colon is not one
+	start, end := -1, -1
+	for k, c := range tok.chars {
+		if c.traits&traitPackageMarker == 0 {
+			continue
+		}
+		switch {
+		case start < 0:
+			start, end = k, k+1
+		case k == end:
+			end++
+		default:
+			return nil, newReaderError(i, "too many package markers in token: %q", tok.String())
+		}
+	}
+	if start < 0 {
+		// Use the current package if none is specified
+		sym, _ := r.Package.Intern(r.caseConvert(tok))
+		return r.symbolExpr(sym), nil
+	}
+	if end-start > 2 {
+		return nil, newReaderError(i, "too many package markers in token: %q", tok.String())
+	}
+	// Tokens for each part, so case conversion sees only that part's characters
+	pkgTok := &token{chars: tok.chars[:start]}
+	nameTok := &token{chars: tok.chars[end:]}
+	if len(nameTok.chars) == 0 {
+		return nil, newReaderError(i, "symbol name missing after package marker in token: %q", tok.String())
+	}
+	// The check in finishToken only saw the whole token, which has the marker
+	if nameTok.allDots() {
+		return nil, newReaderError(i, "token consists only of dots: %q", nameTok.String())
+	}
+	name := r.caseConvert(nameTok)
+	internal := end-start == 2
+	shorthand := len(pkgTok.chars) == 0
+	var pkg *types.Package
+	if shorthand {
+		// The keyword form has no package name, and :: needs one
+		if internal {
+			return nil, newReaderError(i, "package name missing before package marker in token: %q", tok.String())
+		}
+		pkg = r.Packages.Keyword()
+	} else {
+		pkgName := r.caseConvert(pkgTok)
+		if pkg = r.Packages.Find(pkgName); pkg == nil {
+			return nil, newReaderError(i, "package %q not found", pkgName)
+		}
+	}
+	// Only the :name shorthand interns with one colon, so that it works for a
+	// name that is not yet present
+	if !internal && !shorthand {
+		// Find also reports symbols the package merely inherits, which are
+		// accessible but not external
+		sym, status := pkg.Find(name)
+		if status == types.SymbolStatusInherited {
+			return nil, newReaderError(i, "symbol %q is inherited, not external, in package %q", name, pkg.Name())
+		}
+		if status != types.SymbolStatusExternal {
+			return nil, newReaderError(i, "symbol %q is not external in package %q", name, pkg.Name())
+		}
+		return r.symbolExpr(sym), nil
+	}
+	sym, _ := pkg.Intern(name)
+	return r.symbolExpr(sym), nil
+}
+
+// intern returns the symbol with the given name in the current package (see
+// symbolExpr for NIL).
 func (r *Reader) intern(i *Input, name string) (types.Expression, error) {
-	if r.Packages == nil || r.Package == nil || r.Packages.Find(r.Package.Name()) != r.Package {
-		return nil, newReaderError(i, "current package is not in the package set")
+	if err := r.checkPackage(i); err != nil {
+		return nil, err
 	}
 	sym, _ := r.Package.Intern(name)
-	if sym.Package() == r.Packages.CommonLisp() && name == "NIL" {
-		return types.Nil, nil
+	return r.symbolExpr(sym), nil
+}
+
+// checkPackage returns an error if the current package is not in the package
+// set.
+func (r *Reader) checkPackage(i *Input) error {
+	if r.Packages == nil || r.Package == nil || r.Packages.Find(r.Package.Name()) != r.Package {
+		return newReaderError(i, "current package is not in the package set")
 	}
-	return sym, nil
+	return nil
+}
+
+// symbolExpr returns sym, except that COMMON-LISP:NIL is the object Nil.
+func (r *Reader) symbolExpr(sym *types.Symbol) types.Expression {
+	if sym.Package() == r.Packages.CommonLisp() && sym.Name() == "NIL" {
+		return types.Nil
+	}
+	return sym
 }
 
 func (r *Reader) Read(i *Input) (types.Expression, error) {
