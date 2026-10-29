@@ -447,6 +447,170 @@ func TestReaderDispatchNonASCIIDigits(t *testing.T) {
 	}
 }
 
+func TestReaderCharacter(t *testing.T) {
+	char := func(r rune) *types.Character { return types.NewCharacter(r) }
+	testDefs := []struct {
+		input string
+		want  []types.Expression
+	}{
+		// A single character is itself, with its case as written
+		{`#\a`, []types.Expression{char('a')}},
+		{`#\A`, []types.Expression{char('A')}},
+		{`#\z`, []types.Expression{char('z')}},
+		{`#\1`, []types.Expression{char('1')}},
+		{`#\é`, []types.Expression{char('é')}},
+		{"#\\\U0001f600", []types.Expression{char(0x1f600)}},
+		// Syntax characters after the backslash
+		{`#\(`, []types.Expression{char('(')}},
+		{`#\)`, []types.Expression{char(')')}},
+		{`#\;`, []types.Expression{char(';')}},
+		{`#\"`, []types.Expression{char('"')}},
+		{`#\'`, []types.Expression{char('\'')}},
+		{`#\\`, []types.Expression{char('\\')}},
+		{`#\|`, []types.Expression{char('|')}},
+		{`#\#`, []types.Expression{char('#')}},
+		{`#\.`, []types.Expression{char('.')}},
+		{`#\ `, []types.Expression{char(' ')}},
+		// Whitespace and invalid characters after the backslash
+		{"#\\\t", []types.Expression{char('\t')}},
+		{"#\\\n", []types.Expression{char('\n')}},
+		{"#\\\x00", []types.Expression{char(0)}},
+		{"#\\\x7f", []types.Expression{char(0x7f)}},
+		{"#\\\u200b", []types.Expression{char(0x200b)}},
+		// Names, ignoring case
+		{`#\Space`, []types.Expression{char(' ')}},
+		// Escapes are allowed in names
+		{`#\Sp|ac|e`, []types.Expression{char(' ')}},
+		{`#\Sp\ace`, []types.Expression{char(' ')}},
+		{`#\SPACE`, []types.Expression{char(' ')}},
+		{`#\space`, []types.Expression{char(' ')}},
+		{`#\Newline`, []types.Expression{char('\n')}},
+		{`#\newline`, []types.Expression{char('\n')}},
+		{`#\Linefeed`, []types.Expression{char('\n')}},
+		{`#\Tab`, []types.Expression{char('\t')}},
+		{`#\Page`, []types.Expression{char('\f')}},
+		{`#\Return`, []types.Expression{char('\r')}},
+		{`#\Rubout`, []types.Expression{char(0x7f)}},
+		{`#\Backspace`, []types.Expression{char('\b')}},
+		{`#\U+41`, []types.Expression{char('A')}},
+		{`#\u+1F600`, []types.Expression{char(0x1f600)}},
+		{`#\U+0`, []types.Expression{char(0)}},
+		// Where the token ends
+		{`#\a b`, []types.Expression{char('a'), types.NewSymbol("B")}},
+		{`#\a;comment`, []types.Expression{char('a')}},
+		{`#\Space;comment`, []types.Expression{char(' ')}},
+		{`#\a"b"`, []types.Expression{char('a'), types.NewString("b")}},
+		{`#\a'b`, []types.Expression{char('a'), types.NewLiteral(types.NewSymbol("B"))}},
+		{`#\a(b)`, []types.Expression{char('a'), types.NewList([]types.Expression{types.NewSymbol("B")})}},
+		{`#\a #\b`, []types.Expression{char('a'), char('b')}},
+		// Characters in other expressions
+		{`(#\a)`, []types.Expression{types.NewList([]types.Expression{char('a')})}},
+		{`(#\a #\b)`, []types.Expression{types.NewList([]types.Expression{char('a'), char('b')})}},
+		{`(#\Space)`, []types.Expression{types.NewList([]types.Expression{char(' ')})}},
+		{`(#\()`, []types.Expression{types.NewList([]types.Expression{char('(')})}},
+		{`(#\))`, []types.Expression{types.NewList([]types.Expression{char(')')})}},
+		{`(a . #\b)`, []types.Expression{types.NewListTail([]types.Expression{types.NewSymbol("A")}, char('b'))}},
+		{`'#\a`, []types.Expression{types.NewLiteral(char('a'))}},
+	}
+	r := reader.NewReader()
+	for _, testDef := range testDefs {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+
+		var got []types.Expression
+		for {
+			tmp, err := r.Read(i)
+			if !assert.NoError(t, err, "unexpected error for %q", testDef.input) || tmp == nil {
+				break
+			}
+			got = append(got, tmp)
+		}
+		if !assert.Len(t, got, len(testDef.want), "wrong number of results for %q", testDef.input) {
+			continue
+		}
+		for k := range testDef.want {
+			assert.Equal(t, testDef.want[k], got[k], "wrong result %d for %q", k, testDef.input)
+		}
+	}
+}
+
+// Printing a character and reading it back must give the same character.
+func TestReaderCharacterRoundTrip(t *testing.T) {
+	r := reader.NewReader()
+	check := func(code rune) {
+		c := types.NewCharacter(code)
+		i, err := reader.NewInput(strings.NewReader(c.String()))
+		assert.NoError(t, err)
+		got, err := r.Read(i)
+		if !assert.NoError(t, err, "reading %q for %#x", c.String(), code) {
+			return
+		}
+		assert.Equal(t, c, got, "reading %q for %#x", c.String(), code)
+	}
+
+	// Every code point through the controls, punctuation, and common scripts
+	for code := rune(0); code < 0x3100; code++ {
+		check(code)
+	}
+	// Sample the rest to keep the test fast, skipping the surrogates
+	for code := rune(0xe000); code < 0x10000; code += 7 {
+		check(code)
+	}
+	// A prime step avoids lining up with block boundaries
+	for code := rune(0x10000); code <= 0x10ffff; code += 251 {
+		check(code)
+	}
+	// The sampling can miss the end
+	check(0x10ffff)
+	check(0x1f600)
+}
+
+func TestReaderCharacterErrors(t *testing.T) {
+	testDefs := []struct {
+		input   string
+		wantErr string
+	}{
+		{`#\`, "end of file after #"},
+		{`(#\`, "end of file after #"},
+		{`'#\`, "end of file after #"},
+		{`#\ab`, "unrecognized character name"},
+		{`#\Foo`, "unrecognized character name"},
+		{`#\Spac`, "unrecognized character name"},
+		{`#\Spaces`, "unrecognized character name"},
+		// The backslash escapes the first |, so the second starts a multiple escape
+		{`#\|Space|`, "end of file in multiple escape"},
+		// Escaped letters are part of the name
+		{`#\a\b`, "unrecognized character name"},
+		{`#\a|b|`, "unrecognized character name"},
+		// The long s and Kelvin sign are not ASCII letters
+		{"#\\\u017fpace", "unrecognized character name"},
+		{"#\\Bac\u212aspace", "unrecognized character name"},
+		{`#\a#`, "unrecognized character name"},
+		{`#\a1`, "unrecognized character name"},
+		{`#\U+`, "unrecognized character name"},
+		{`#\U+G`, "unrecognized character name"},
+		{`#\U+110000`, "unrecognized character name"},
+		{`#\U+D800`, "unrecognized character name"},
+		// A name is the whole token, so nothing can follow it
+		{`#\Space1`, "unrecognized character name"},
+		{`(#\Foo)`, "unrecognized character name"},
+		// Characters after the first are read like any other token
+		{"#\\a\x01", "invalid character"},
+		{"#\\\xff", "invalid UTF-8"},
+	}
+	r := reader.NewReader()
+	for _, testDef := range testDefs {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		assert.ErrorContains(t, err, testDef.wantErr, "input: %q", testDef.input)
+		assert.Nil(t, tmp, "input: %q", testDef.input)
+		var readerErr reader.ReaderError
+		assert.True(t, errors.As(err, &readerErr), "expected ReaderError for %q", testDef.input)
+	}
+}
+
 func TestReaderRubout(t *testing.T) {
 	sym := types.NewSymbol
 	testDefs := []struct {
@@ -1144,6 +1308,11 @@ func TestReaderError(t *testing.T) {
 		{input: "#\u0663r10", wantLine: 1, wantOffset: 2},
 		{input: "#1\u0663r10", wantLine: 1, wantOffset: 3},
 		{input: "#\uff11r10", wantLine: 1, wantOffset: 2},
+		// Character errors
+		{input: `#\`, wantLine: 1, wantOffset: 2},
+		{input: `#\ab`, wantLine: 1, wantOffset: 4},
+		{input: `(#\Foo)`, wantLine: 1, wantOffset: 6},
+		{input: "(a\n#\\Foo)", wantLine: 2, wantOffset: 5},
 		{input: "#p", wantLine: 1, wantOffset: 2},
 		{input: "\n#p", wantLine: 2, wantOffset: 2},
 		{input: "#1r0", wantLine: 1, wantOffset: 3},

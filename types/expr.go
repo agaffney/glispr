@@ -23,6 +23,7 @@ const (
 	ExpressionTypeString
 	ExpressionTypeNumber
 	ExpressionTypeSymbol
+	ExpressionTypeCharacter
 )
 
 // null is the type of the empty list. It is unexported so that Nil is the only
