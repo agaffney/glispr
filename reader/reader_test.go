@@ -6,6 +6,8 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 
@@ -1759,6 +1761,9 @@ func TestReaderPackageMarkers(t *testing.T) {
 	lower, _ := lib.Intern("lower")
 	assert.NoError(t, lib.Export(lower))
 	kw, _ := ps.Keyword().Intern("FOO")
+	emptyKw, _ := ps.Keyword().Intern("")
+	empty, _ := lib.Intern("")
+	assert.NoError(t, lib.Export(empty))
 	user, _ := ps.User().Intern("X")
 	clT, _ := ps.CommonLisp().Find("T")
 
@@ -1793,6 +1798,11 @@ func TestReaderPackageMarkers(t *testing.T) {
 		{"cl:nil", types.Nil},
 		{"cl::nil", types.Nil},
 		{"cl:t", clT},
+		// An empty escape is a name with no characters
+		{":||", emptyKw},
+		{"keyword:||", emptyKw},
+		{"lib:||", empty},
+		{"lib::||", empty},
 		// Escaped and quoted markers are part of the name
 		{`|a:b|`, sameName{"a:b", ps.User()}},
 		{`a\:b`, sameName{"A:B", ps.User()}},
@@ -1824,7 +1834,10 @@ func TestReaderPackageMarkers(t *testing.T) {
 		{"keyword:missing", "not external"},
 		{"nope:x", "not found"},
 		{"nope::x", "not found"},
+		{"||:foo", "package \"\" not found"},
+		{"||::foo", "package \"\" not found"},
 		{"lib:", "symbol name missing"},
+		{"lib:|", "end of file in multiple escape"},
 		{"lib::", "symbol name missing"},
 		{":", "symbol name missing"},
 		{"::", "symbol name missing"},
@@ -1945,5 +1958,105 @@ func TestReaderUninterned(t *testing.T) {
 		assert.ErrorContains(t, err, tc.msg, "input %q", tc.input)
 		var rerr reader.ReaderError
 		assert.ErrorAs(t, err, &rerr, "input %q", tc.input)
+	}
+}
+
+// TestReaderFormatRoundTrip checks that every symbol with a short name made of
+// characters that need care when printing reads back as the same symbol.
+func TestReaderFormatRoundTrip(t *testing.T) {
+	ps := types.NewPackages()
+	lib, err := ps.Make("LIB", nil, nil)
+	assert.NoError(t, err)
+	// Uses lib, so that what lib exports is accessible bare
+	both, err := ps.Make("BOTH", nil, []*types.Package{ps.CommonLisp(), lib})
+	assert.NoError(t, err)
+
+	// Lowercase, a digit, signs, dots, an exponent marker, a ratio marker, the
+	// start of a dispatch macro, the escapes, the package marker, and a space
+	// and characters that are invalid in the readtable
+	alphabet := []string{"a", "A", "1", "+", ".", "e", "/", "#", "|", `\`, ":", " ", "(", "\x01", "\u00a0", "\u200d"}
+	names := []string{""}
+	for _, first := range alphabet {
+		names = append(names, first)
+		for _, second := range alphabet {
+			names = append(names, first+second)
+			for _, third := range alphabet {
+				names = append(names, first+second+third)
+			}
+		}
+	}
+
+	read := func(current *types.Package, text string) types.Expression {
+		r := reader.NewReader(ps)
+		r.Package = current
+		i, err := reader.NewInput(strings.NewReader(text))
+		assert.NoError(t, err)
+		got, err := r.Read(i)
+		assert.NoError(t, err, "text %q", text)
+		return got
+	}
+
+	// Package names go through the same escaping
+	for _, name := range names[1:] {
+		pkg, err := ps.Make(name, nil, nil)
+		assert.NoError(t, err, "package %q", name)
+		sym, _ := pkg.Intern("A")
+		assert.NoError(t, pkg.Export(sym))
+		text := types.Format(sym, nil)
+		assert.Same(t, sym, read(ps.User(), text), "package %q: %q", name, text)
+		internal, _ := pkg.Intern("B")
+		text = types.Format(internal, nil)
+		assert.Same(t, internal, read(ps.User(), text), "package %q: %q", name, text)
+	}
+
+	for n, name := range names {
+		interned, _ := lib.Intern(name)
+		if n%2 == 0 {
+			assert.NoError(t, lib.Export(interned))
+		}
+		syms := []*types.Symbol{types.NewSymbol(name), interned}
+		if name != "" {
+			kw, _ := ps.Keyword().Intern(name)
+			syms = append(syms, kw)
+		}
+		for _, sym := range syms {
+			for _, current := range []*types.Package{lib, both, ps.User()} {
+				text := types.Format(sym, current)
+				got := read(current, text)
+				if sym.Package() == nil {
+					// A new symbol each time, so only the name can match
+					gotSym, ok := got.(*types.Symbol)
+					assert.True(t, ok && gotSym.Name() == name && gotSym.Package() == nil, "%q in %s: got %v", text, current.Name(), got)
+					continue
+				}
+				if !assert.Same(t, sym, got, "%q in %s", text, current.Name()) {
+					t.FailNow()
+				}
+			}
+		}
+	}
+}
+
+// TestReaderFormatEveryCharacter checks every code point, so that what Format
+// escapes can't drift from what the standard readtable accepts.
+func TestReaderFormatEveryCharacter(t *testing.T) {
+	r := newTestReader()
+	for c := rune(0); c <= unicode.MaxRune; c++ {
+		if !utf8.ValidRune(c) {
+			continue
+		}
+		name := "A" + string(c) + "B"
+		text := types.Format(types.NewSymbol(name), nil)
+		i, err := reader.NewInput(strings.NewReader(text))
+		assert.NoError(t, err)
+		got, err := r.Read(i)
+		// Stop at the first one, as a mismatch would fail for thousands
+		if !assert.NoError(t, err, "character %#x: %q", c, text) {
+			t.FailNow()
+		}
+		sym, ok := got.(*types.Symbol)
+		if !assert.True(t, ok && sym.Name() == name && sym.Package() == nil, "character %#x: %q read as %v", c, text, got) {
+			t.FailNow()
+		}
 	}
 }

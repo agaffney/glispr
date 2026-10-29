@@ -1,6 +1,9 @@
 package reader
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // traitSet is a set of constituent traits (CLHS 2.1.4.2). The traits of a
 // character are fixed by the standard and are not part of the readtable.
@@ -66,6 +69,9 @@ type token struct {
 	// sawEscape is set when an escape character appeared in the token, even if
 	// it contributed no characters, as in the empty multiple escape of `1||`.
 	sawEscape bool
+	// escapes holds the number of characters the token had at each multiple
+	// escape character, to show where an empty escape (`||`) came in a token.
+	escapes []int
 }
 
 // add appends r to the token. An escaped character is treated as if it were a
@@ -83,6 +89,17 @@ func (t *token) add(r rune, escaped bool) {
 // started reports whether any part of a token has been read. An empty multiple
 // escape (`||`) starts a token even though it adds no characters.
 func (t *token) started() bool { return len(t.chars) > 0 || t.sawEscape }
+
+// markEscape records a multiple escape character at the current end of the
+// token.
+func (t *token) markEscape() {
+	t.sawEscape = true
+	t.escapes = append(t.escapes, len(t.chars))
+}
+
+// hasEscapeAt reports whether a multiple escape character was read when the
+// token had n characters, so it came between character n-1 and character n.
+func (t *token) hasEscapeAt(n int) bool { return slices.Contains(t.escapes, n) }
 
 // hasEscape reports whether the token was written using an escape character.
 func (t *token) hasEscape() bool { return t.sawEscape }
