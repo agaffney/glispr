@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -292,13 +293,18 @@ func readDispatch(r *Reader, i *Input, initialChar rune) (types.Expression, erro
 		return nil, nil
 	case '\\':
 		return readCharacter(r, i)
-	case 'b', 'B', 'o', 'O', 'x', 'X':
-		// Simple radix number forms: #b, #o, #x
-		return readDispatchRadixNumber(r, i, dispatch)
+	case '(':
+		return readVector(r, i, -1)
+	case 'b', 'B':
+		return readDispatchRadixNumber(r, i, 2)
+	case 'o', 'O':
+		return readDispatchRadixNumber(r, i, 8)
+	case 'x', 'X':
+		return readDispatchRadixNumber(r, i, 16)
 	default:
-		// Complex radix number forms: #<radix>r<number>
+		// Forms with a number argument: #<radix>r<number> and #<length>(...)
 		if isASCIIDigit(dispatch) {
-			return readDispatchRadixNumber(r, i, dispatch)
+			return readDispatchArgument(r, i, dispatch)
 		}
 	}
 
@@ -347,61 +353,43 @@ func readBlockComment(r *Reader, i *Input) error {
 	return nil
 }
 
-// readDispatchRadixNumber reads and parses a radix-prefixed number (#b, #o, #x,
-// or #<digits>r<number>) after the initial '#' and dispatch character have
-// been consumed. It returns the parsed number or nil, and an optional error
-func readDispatchRadixNumber(r *Reader, i *Input, dispatch rune) (types.Expression, error) {
-	radix := 10
-	var radixDigits []rune
-
-	if isASCIIDigit(dispatch) {
-		// #<digits>r<number> form
-		radixDigits = []rune{dispatch}
-		for {
-			next, _, err := i.ReadRune()
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					break
-				}
-				return nil, err
-			}
-			if isASCIIDigit(next) {
-				radixDigits = append(radixDigits, next)
-				continue
-			}
-			if err := i.UnreadRune(); err != nil {
-				return nil, err
-			}
-			break
-		}
+// readDispatchArgument reads the rest of a dispatch macro that has a number
+// argument, such as #16rFF or #3(a b c), once the first digit of it has been
+// read.
+func readDispatchArgument(r *Reader, i *Input, firstDigit rune) (types.Expression, error) {
+	digits := []rune{firstDigit}
+	for {
 		next, _, err := i.ReadRune()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil, newReaderError(i, "invalid radix specifier: missing 'r'")
+				return nil, newReaderError(i, "unexpected end of file after dispatch argument")
 			}
 			return nil, err
 		}
-		if next != 'r' && next != 'R' {
-			return nil, newReaderError(i, "invalid radix specifier: expected 'r'")
+		if isASCIIDigit(next) {
+			digits = append(digits, next)
+			continue
 		}
-		radix, err = strconv.Atoi(string(radixDigits))
-		if err != nil {
-			return nil, newReaderError(i, "invalid radix specifier: %v", err)
+		arg, err := strconv.Atoi(string(digits))
+		switch next {
+		case 'r', 'R':
+			if err != nil || arg < 2 || arg > 36 {
+				return nil, newReaderError(i, "invalid radix specifier: radix must be between 2 and 36")
+			}
+			return readDispatchRadixNumber(r, i, arg)
+		case '(':
+			if err != nil || arg > maxVectorLength {
+				return nil, newReaderError(i, "invalid vector length: the limit is %d", maxVectorLength)
+			}
+			return readVector(r, i, arg)
 		}
-		if radix < 2 || radix > 36 {
-			return nil, newReaderError(i, "invalid radix specifier: radix must be between 2 and 36")
-		}
-	} else {
-		switch dispatch {
-		case 'b', 'B':
-			radix = 2
-		case 'o', 'O':
-			radix = 8
-		case 'x', 'X':
-			radix = 16
-		}
+		return nil, newReaderError(i, "invalid dispatch argument: expected 'r' or '('")
 	}
+}
 
+// readDispatchRadixNumber reads the digits of a number in the given radix, once
+// the prefix such as #x or #16r has been read.
+func readDispatchRadixNumber(r *Reader, i *Input, radix int) (types.Expression, error) {
 	// Read number digits (without the #<radix> prefix)
 	var numDigits strings.Builder
 	for {
@@ -439,61 +427,99 @@ func readDispatchRadixNumber(r *Reader, i *Input, dispatch rune) (types.Expressi
 }
 
 func readList(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
-	items := []types.Expression{}
-	// tail is the object after the dot, once it has been read
-	var tail types.Expression
+	items, tail, err := readListItems(r, i, "list", true)
+	if err != nil {
+		return nil, err
+	}
+	if tail != nil {
+		return types.NewListTail(items, tail), nil
+	}
+	return types.NewList(items), nil
+}
+
+// readListItems reads expressions up to the close paren that ends a list or
+// vector, which is named by what in errors. If allowDot is set, a dot before the
+// last expression makes that expression the tail, which is returned. The tail is
+// nil otherwise.
+func readListItems(r *Reader, i *Input, what string, allowDot bool) (items []types.Expression, tail types.Expression, err error) {
+	items = []types.Expression{}
 	dotSeen := false
 	var res readResult
 	var ch rune
-	var err error
 	for {
 		ch, _, err = i.ReadRune()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil, newReaderError(i, "unexpected end of file in list")
+				return nil, nil, newReaderError(i, "unexpected end of file in %s", what)
 			}
-			return nil, err
+			return nil, nil, err
 		}
 		if r.rt.SyntaxTypeFunc(ch) == ReadtableSyntaxTypeWhitespace {
 			continue
 		}
 		if ch == ')' {
 			if dotSeen && tail == nil {
-				return nil, newReaderError(i, "dot context error: nothing after dot in list")
+				return nil, nil, newReaderError(i, "dot context error: nothing after dot in %s", what)
 			}
-			break
+			return items, tail, nil
 		}
 		if err = i.UnreadRune(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		res, err = r.readOne(i)
 		if err != nil {
 			if errors.Is(err, errSkipped) {
 				continue
 			}
-			return nil, err
+			return nil, nil, err
 		}
 		switch {
 		case res.isDot():
+			if !allowDot {
+				return nil, nil, newReaderError(i, "dot context error: dot in %s", what)
+			}
 			if len(items) == 0 {
-				return nil, newReaderError(i, "dot context error: nothing before dot in list")
+				return nil, nil, newReaderError(i, "dot context error: nothing before dot in %s", what)
 			}
 			if dotSeen {
-				return nil, newReaderError(i, "dot context error: more than one dot in list")
+				return nil, nil, newReaderError(i, "dot context error: more than one dot in %s", what)
 			}
 			dotSeen = true
 		case dotSeen && tail != nil:
-			return nil, newReaderError(i, "dot context error: more than one object after dot in list")
+			return nil, nil, newReaderError(i, "dot context error: more than one object after dot in %s", what)
 		case dotSeen:
 			tail = res.expr
 		default:
 			items = append(items, res.expr)
 		}
 	}
-	if tail != nil {
-		return types.NewListTail(items, tail), nil
+}
+
+// maxVectorLength is the largest length a vector can be given with #n(, so that
+// a short token can't use up all the memory by asking for a huge vector.
+const maxVectorLength = 1 << 20
+
+// readVector reads the rest of a vector after #( or #n(. A length of -1 means
+// that none was given. With a length, the vector is filled out to it by
+// repeating the last element, and having more elements than that is an error.
+func readVector(r *Reader, i *Input, length int) (types.Expression, error) {
+	items, _, err := readListItems(r, i, "vector", false)
+	if err != nil {
+		return nil, err
 	}
-	return types.NewList(items), nil
+	if length >= 0 {
+		if len(items) > length {
+			return nil, newReaderError(i, "vector of length %d has too many elements (%d)", length, len(items))
+		}
+		if len(items) == 0 && length > 0 {
+			return nil, newReaderError(i, "vector of length %d has no elements to fill it with", length)
+		}
+		items = slices.Grow(items, length-len(items))
+		for len(items) < length {
+			items = append(items, items[len(items)-1])
+		}
+	}
+	return types.NewVector(items), nil
 }
 
 func readComment(r *Reader, i *Input, initialChar rune) (types.Expression, error) {

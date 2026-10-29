@@ -24,6 +24,7 @@ const (
 	ExpressionTypeNumber
 	ExpressionTypeSymbol
 	ExpressionTypeCharacter
+	ExpressionTypeVector
 )
 
 // null is the type of the empty list. It is unexported so that Nil is the only

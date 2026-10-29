@@ -447,6 +447,186 @@ func TestReaderDispatchNonASCIIDigits(t *testing.T) {
 	}
 }
 
+func TestReaderVector(t *testing.T) {
+	sym := types.NewSymbol
+	vec := func(items ...types.Expression) *types.Vector { return types.NewVector(items) }
+	num := func(n int64) *types.Number { return types.NewNumberInteger(big.NewInt(n)) }
+	testDefs := []struct {
+		input string
+		want  []types.Expression
+	}{
+		{`#()`, []types.Expression{vec()}},
+		{`#( )`, []types.Expression{vec()}},
+		{`#(a)`, []types.Expression{vec(sym("A"))}},
+		{`#(1 2 3)`, []types.Expression{vec(num(1), num(2), num(3))}},
+		{`#(a "b" 1 #\c 2/3)`, []types.Expression{
+			vec(sym("A"), types.NewString("b"), num(1), types.NewCharacter('c'), types.NewNumberRatio(big.NewRat(2, 3))),
+		}},
+		// Elements that are lists and vectors
+		{`#((a) () #(b))`, []types.Expression{
+			vec(types.NewList([]types.Expression{sym("A")}), types.Nil, vec(sym("B"))),
+		}},
+		{`#(#())`, []types.Expression{vec(vec())}},
+		// Comments and whitespace inside
+		{"#(a #| c |# b ; d\n c)", []types.Expression{vec(sym("A"), sym("B"), sym("C"))}},
+		{"#(\n  a\n  b\n)", []types.Expression{vec(sym("A"), sym("B"))}},
+		// Where the vector ends
+		{`#(a)b`, []types.Expression{vec(sym("A")), sym("B")}},
+		{`#(a)(b)`, []types.Expression{vec(sym("A")), types.NewList([]types.Expression{sym("B")})}},
+		{`#(a) #(b)`, []types.Expression{vec(sym("A")), vec(sym("B"))}},
+		// In other expressions
+		{`(#(1) 2)`, []types.Expression{types.NewList([]types.Expression{vec(num(1)), num(2)})}},
+		{`(a . #(b))`, []types.Expression{types.NewListTail([]types.Expression{sym("A")}, vec(sym("B")))}},
+		{`'#(a)`, []types.Expression{types.NewLiteral(vec(sym("A")))}},
+		// Dots in tokens are not the dot
+		{`#(a.b .c)`, []types.Expression{vec(sym("A.B"), sym(".C"))}},
+		{`#(\. |.|)`, []types.Expression{vec(sym("."), sym("."))}},
+	}
+	r := reader.NewReader()
+	for _, testDef := range testDefs {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+
+		var got []types.Expression
+		for {
+			tmp, err := r.Read(i)
+			if !assert.NoError(t, err, "unexpected error for %q", testDef.input) || tmp == nil {
+				break
+			}
+			got = append(got, tmp)
+		}
+		if !assert.Len(t, got, len(testDef.want), "wrong number of results for %q", testDef.input) {
+			continue
+		}
+		for k := range testDef.want {
+			assert.Equal(t, testDef.want[k], got[k], "wrong result %d for %q", k, testDef.input)
+		}
+	}
+}
+
+func TestReaderVectorLength(t *testing.T) {
+	sym := types.NewSymbol
+	vec := func(items ...types.Expression) *types.Vector { return types.NewVector(items) }
+	testDefs := []struct {
+		input string
+		want  *types.Vector
+	}{
+		// The last element is repeated to fill the vector
+		{`#3(a)`, vec(sym("A"), sym("A"), sym("A"))},
+		{`#5(a b)`, vec(sym("A"), sym("B"), sym("B"), sym("B"), sym("B"))},
+		{`#3(a b c)`, vec(sym("A"), sym("B"), sym("C"))},
+		{`#1(a)`, vec(sym("A"))},
+		{`#0()`, vec()},
+		// The length is decimal, and leading zeros don't matter
+		{`#03(a)`, vec(sym("A"), sym("A"), sym("A"))},
+		{`#010(a)`, vec(sym("A"), sym("A"), sym("A"), sym("A"), sym("A"), sym("A"), sym("A"), sym("A"), sym("A"), sym("A"))},
+	}
+	r := reader.NewReader()
+	for _, testDef := range testDefs {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+		got, err := r.Read(i)
+		assert.NoError(t, err, "unexpected error for %q", testDef.input)
+		assert.Equal(t, testDef.want, got, "wrong result for %q", testDef.input)
+	}
+
+	// The filled elements are the same object, not copies
+	i, err := reader.NewInput(strings.NewReader(`#3(#(b))`))
+	assert.NoError(t, err)
+	got, err := r.Read(i)
+	assert.NoError(t, err)
+	if v, ok := got.(*types.Vector); assert.True(t, ok) {
+		assert.Same(t, v.At(0), v.At(1))
+		assert.Same(t, v.At(0), v.At(2))
+	}
+
+	// The largest allowed length
+	i, err = reader.NewInput(strings.NewReader(`#1048576(a)`))
+	assert.NoError(t, err)
+	got, err = r.Read(i)
+	assert.NoError(t, err)
+	if v, ok := got.(*types.Vector); assert.True(t, ok) {
+		assert.Equal(t, 1048576, v.Len())
+	}
+}
+
+// A close paren after a vector is not part of it, so it is left for the next
+// read, which treats it as unmatched like any other stray one.
+func TestReaderVectorStrayCloseParen(t *testing.T) {
+	r := reader.NewReader()
+	for _, input := range []string{`#(a b))`, `#())`, `#3(a))`} {
+		i, err := reader.NewInput(strings.NewReader(input))
+		assert.NoError(t, err)
+
+		got, err := r.Read(i)
+		assert.NoError(t, err, "input: %q", input)
+		assert.IsType(t, &types.Vector{}, got, "input: %q", input)
+
+		got, err = r.Read(i)
+		assert.ErrorContains(t, err, "unmatched close parenthesis", "input: %q", input)
+		assert.Nil(t, got, "input: %q", input)
+	}
+}
+
+func TestReaderVectorErrors(t *testing.T) {
+	testDefs := []struct {
+		input   string
+		wantErr string
+	}{
+		{`#(`, "end of file in vector"},
+		{`#(a`, "end of file in vector"},
+		{`#(a ;c`, "end of file in vector"},
+		{`#(a #(b)`, "end of file in vector"},
+		{`(#(a)`, "end of file in list"},
+		{`#3(`, "end of file in vector"},
+		// A vector has no dotted tail
+		{`#(.)`, "dot in vector"},
+		{`#(a . b)`, "dot in vector"},
+		{`#(a .)`, "dot in vector"},
+		{`#(. a)`, "dot in vector"},
+		{`#2(a . b)`, "dot in vector"},
+		// Too many elements, or none to fill the vector with
+		{`#0(a)`, "too many elements (1)"},
+		{`#2(a b c)`, "too many elements (3)"},
+		{`#1(a b)`, "too many elements (2)"},
+		{`#3()`, "no elements to fill"},
+		{`#1()`, "no elements to fill"},
+		// Lengths that are too large
+		{`#1048577(a)`, "invalid vector length"},
+		{`#99999999999999999999(a)`, "invalid vector length"},
+		{`#999999999999999999999999999999(a)`, "invalid vector length"},
+		// An argument must be followed by r or (
+		{`#3`, "end of file after dispatch argument"},
+		{`#3a`, "expected 'r' or '('"},
+		{`#3 (a)`, "expected 'r' or '('"},
+		{`#3)`, "expected 'r' or '('"},
+		{`#3#(a)`, "expected 'r' or '('"},
+		// The length is not a radix
+		{`#1r(a)`, "radix must be between 2 and 36"},
+		{`#99999999999999999999r1`, "radix must be between 2 and 36"},
+	}
+	r := reader.NewReader()
+	for _, testDef := range testDefs {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+
+		tmp, err := r.Read(i)
+		assert.ErrorContains(t, err, testDef.wantErr, "input: %q", testDef.input)
+		assert.Nil(t, tmp, "input: %q", testDef.input)
+		var readerErr reader.ReaderError
+		assert.True(t, errors.As(err, &readerErr), "expected ReaderError for %q", testDef.input)
+	}
+
+	// Radix forms with an argument still read numbers
+	for input, want := range map[string]int64{"#2r101": 5, "#16rff": 255, "#3r10": 3} {
+		i, err := reader.NewInput(strings.NewReader(input))
+		assert.NoError(t, err)
+		got, err := r.Read(i)
+		assert.NoError(t, err, input)
+		assert.Equal(t, types.NewNumberInteger(big.NewInt(want)), got, input)
+	}
+}
+
 func TestReaderCharacter(t *testing.T) {
 	char := func(r rune) *types.Character { return types.NewCharacter(r) }
 	testDefs := []struct {
@@ -1308,6 +1488,16 @@ func TestReaderError(t *testing.T) {
 		{input: "#\u0663r10", wantLine: 1, wantOffset: 2},
 		{input: "#1\u0663r10", wantLine: 1, wantOffset: 3},
 		{input: "#\uff11r10", wantLine: 1, wantOffset: 2},
+		// Vector errors
+		{input: "#(", wantLine: 1, wantOffset: 2},
+		{input: "#(a b", wantLine: 1, wantOffset: 5},
+		{input: "#(.)", wantLine: 1, wantOffset: 3},
+		{input: "#(a . b)", wantLine: 1, wantOffset: 5},
+		{input: "#3()", wantLine: 1, wantOffset: 4},
+		{input: "#2(a b c)", wantLine: 1, wantOffset: 9},
+		{input: "#3a", wantLine: 1, wantOffset: 3},
+		{input: "#3", wantLine: 1, wantOffset: 2},
+		{input: "(a\n#(b\n", wantLine: 3, wantOffset: 1},
 		// Character errors
 		{input: `#\`, wantLine: 1, wantOffset: 2},
 		{input: `#\ab`, wantLine: 1, wantOffset: 4},
