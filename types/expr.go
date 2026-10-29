@@ -358,8 +358,13 @@ func (n Number) floatString() string {
 
 type Symbol struct {
 	name string
+	// pkg is the home package, which is nil for an uninterned symbol
+	pkg *Package
 }
 
+// NewSymbol returns a new symbol that isn't interned in any package, like
+// make-symbol. To get the one symbol that a package has for a name, use
+// Package.Intern.
 func NewSymbol(name string) *Symbol {
 	return &Symbol{
 		name: name,
@@ -375,4 +380,9 @@ func (s Symbol) String() string {
 
 func (s Symbol) Name() string {
 	return s.name
+}
+
+// Package returns the home package of the symbol, or nil if it is uninterned.
+func (s Symbol) Package() *Package {
+	return s.pkg
 }
