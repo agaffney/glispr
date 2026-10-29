@@ -108,7 +108,14 @@ func (r *Reader) readRequired(i *Input) (types.Expression, error) {
 }
 
 func (r *Reader) readOne(i *Input) (readResult, error) {
-	tok := &token{}
+	return r.readItem(i, &token{}, r.finishToken)
+}
+
+// readItem reads from the input until the end of an expression. It starts with
+// the characters already in tok, and when the token ends it is converted to a
+// result by finish. If there are no characters yet, it can instead read an
+// expression using a macro function.
+func (r *Reader) readItem(i *Input, tok *token, finish func(*Input, *token) (readResult, error)) (readResult, error) {
 	multipleEscape := false
 	for {
 		ch, _, err := i.ReadRune()
@@ -120,7 +127,7 @@ func (r *Reader) readOne(i *Input) (readResult, error) {
 				if !tok.started() {
 					return readResult{}, nil
 				}
-				return r.finishToken(i, tok)
+				return finish(i, tok)
 			}
 			return readResult{}, err
 		}
@@ -137,7 +144,7 @@ func (r *Reader) readOne(i *Input) (readResult, error) {
 				if err := i.UnreadRune(); err != nil {
 					return readResult{}, err
 				}
-				return r.finishToken(i, tok)
+				return finish(i, tok)
 			}
 			continue
 		case ReadtableSyntaxTypeMacroTerminating, ReadtableSyntaxTypeMacroNonTerminating:
@@ -150,7 +157,7 @@ func (r *Reader) readOne(i *Input) (readResult, error) {
 				if err := i.UnreadRune(); err != nil {
 					return readResult{}, err
 				}
-				return r.finishToken(i, tok)
+				return finish(i, tok)
 			}
 			fn, ok := r.rt.MacroFuncs[ch]
 			if !ok {
@@ -229,6 +236,40 @@ func readCloseParen(r *Reader, i *Input, initialChar rune) (types.Expression, er
 	return nil, newReaderError(i, "unmatched close parenthesis")
 }
 
+// readCharacter reads the rest of a character after #\. The backslash makes the
+// next character part of the token no matter what it is, so #\( is a character.
+// A token of one character is that character, with its case as written, and a
+// longer one is the name of a character.
+func readCharacter(r *Reader, i *Input) (types.Expression, error) {
+	ch, _, err := i.ReadRune()
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, newReaderError(i, `unexpected end of file after #\`)
+		}
+		return nil, err
+	}
+	tok := &token{}
+	tok.add(ch, true)
+	res, err := r.readItem(i, tok, finishCharacter)
+	if err != nil {
+		return nil, err
+	}
+	return res.expr, nil
+}
+
+// finishCharacter converts the token after #\ to a character.
+func finishCharacter(i *Input, tok *token) (readResult, error) {
+	if len(tok.chars) == 1 {
+		return readResult{expr: types.NewCharacter(tok.chars[0].r), tok: tok}, nil
+	}
+	name := tok.String()
+	ch, ok := types.CharacterFromName(name)
+	if !ok {
+		return readResult{}, newReaderError(i, "unrecognized character name %q", name)
+	}
+	return readResult{expr: types.NewCharacter(ch), tok: tok}, nil
+}
+
 // isASCIIDigit reports whether r is one of 0-9. Digits from other scripts are
 // not digits for a dispatch macro's numeric argument.
 func isASCIIDigit(r rune) bool { return r >= '0' && r <= '9' }
@@ -249,6 +290,8 @@ func readDispatch(r *Reader, i *Input, initialChar rune) (types.Expression, erro
 			return nil, err
 		}
 		return nil, nil
+	case '\\':
+		return readCharacter(r, i)
 	case 'b', 'B', 'o', 'O', 'x', 'X':
 		// Simple radix number forms: #b, #o, #x
 		return readDispatchRadixNumber(r, i, dispatch)

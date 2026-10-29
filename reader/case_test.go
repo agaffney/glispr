@@ -123,3 +123,35 @@ func TestReaderCasePreserve(t *testing.T) {
 		}
 	}
 }
+
+// Characters keep their case in every case mode, and names ignore it.
+func TestReaderCharacterCase(t *testing.T) {
+	for _, mode := range []ReadtableCaseMode{
+		ReadtableCaseModeUpcase,
+		ReadtableCaseModeDowncase,
+		ReadtableCaseModePreserve,
+		ReadtableCaseModeInvert,
+	} {
+		r := NewReader()
+		r.rt.CaseMode = mode
+		testCases := []struct {
+			input string
+			want  rune
+		}{
+			{input: `#\a`, want: 'a'},
+			{input: `#\A`, want: 'A'},
+			{input: `#\é`, want: 'é'},
+			{input: `#\SPACE`, want: ' '},
+			{input: `#\space`, want: ' '},
+			{input: `#\Space`, want: ' '},
+			{input: `#\nEwLiNe`, want: '\n'},
+		}
+		for _, tc := range testCases {
+			i, err := NewInput(strings.NewReader(tc.input))
+			assert.NoError(t, err)
+			got, err := r.Read(i)
+			assert.NoError(t, err, "input %q, mode %d", tc.input, mode)
+			assert.Equal(t, types.NewCharacter(tc.want), got, "input %q, mode %d", tc.input, mode)
+		}
+	}
+}
