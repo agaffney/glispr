@@ -31,6 +31,11 @@ func writeExpr(sb *strings.Builder, e Expression, current *Package) {
 			sb.WriteString("<nil>")
 			return
 		}
+		if prefix, item, ok := quoteForm(v); ok {
+			sb.WriteString(prefix)
+			writeExpr(sb, item, current)
+			return
+		}
 		sb.WriteString("(")
 		writeExpr(sb, v.car, current)
 		rest := v.cdr
@@ -57,12 +62,27 @@ func writeExpr(sb *strings.Builder, e Expression, current *Package) {
 			writeExpr(sb, item, current)
 		}
 		sb.WriteString(")")
-	case *Literal:
-		sb.WriteString("'")
-		writeExpr(sb, v.item, current)
 	default:
 		sb.WriteString(e.String())
 	}
+}
+
+// quoteForm reports whether c is a list of COMMON-LISP:QUOTE or FUNCTION and one
+// item, which are written as a prefix and the item. A symbol with one of those
+// names in another package doesn't count.
+func quoteForm(c *Cons) (prefix string, item Expression, ok bool) {
+	sym, isSym := c.car.(*Symbol)
+	rest, isCons := c.cdr.(*Cons)
+	if !isSym || !isCons || rest.cdr != Nil || sym.pkg == nil || sym.pkg.name != NameCommonLisp {
+		return "", nil, false
+	}
+	switch sym.name {
+	case NameQuote:
+		return "'", rest.car, true
+	case NameFunction:
+		return "#'", rest.car, true
+	}
+	return "", nil, false
 }
 
 func writeSymbol(sb *strings.Builder, sym *Symbol, current *Package) {

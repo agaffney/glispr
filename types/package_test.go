@@ -36,8 +36,8 @@ func TestStandardPackages(t *testing.T) {
 	assert.Nil(t, ps.Find("FOO"))
 	assert.Nil(t, ps.Find(""))
 
-	// NIL and T are exported from COMMON-LISP, and so inherited by the user package
-	for _, name := range []string{"NIL", "T"} {
+	// These are exported from COMMON-LISP, and so inherited by the user package
+	for _, name := range []string{"NIL", "T", "QUOTE", "FUNCTION"} {
 		sym, status := cl.Find(name)
 		if assert.NotNil(t, sym, name) {
 			assert.Equal(t, types.SymbolStatusExternal, status, name)

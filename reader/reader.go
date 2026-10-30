@@ -351,12 +351,26 @@ func readString(r *Reader, i *Input, initialChar rune) (types.Expression, error)
 	}
 }
 
-func readLiteral(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
+// readQuote reads the expression after ' and returns it in a list with
+// COMMON-LISP:QUOTE.
+func readQuote(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
+	return readQuoteForm(r, i, types.NameQuote)
+}
+
+// readQuoteForm reads an expression and returns it in a list with the symbol
+// with the given name in COMMON-LISP, which is how 'x and #'x are read.
+func readQuoteForm(r *Reader, i *Input, name string) (types.Expression, error) {
+	// The package set is needed to find COMMON-LISP, but the current package is not
+	if r.Packages == nil {
+		return nil, newReaderError(i, "no package set")
+	}
 	item, err := r.readRequired(i)
 	if err != nil {
 		return nil, err
 	}
-	return types.NewLiteral(item), nil
+	// The symbol is always there, as NewPackages exports it
+	sym, _ := r.Packages.CommonLisp().Find(name)
+	return types.NewList([]types.Expression{sym, item}), nil
 }
 
 func readCloseParen(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
@@ -465,6 +479,8 @@ func readDispatch(r *Reader, i *Input, initialChar rune) (types.Expression, erro
 		return readCharacter(r, i)
 	case '(':
 		return readVector(r, i, -1)
+	case '\'':
+		return readQuoteForm(r, i, types.NameFunction)
 	case ':':
 		return readUninterned(r, i)
 	case 'b', 'B':

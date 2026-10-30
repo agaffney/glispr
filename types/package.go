@@ -141,9 +141,16 @@ const (
 	NameKeyword        = "KEYWORD"
 )
 
+// Names of the symbols in COMMON-LISP that the reader makes quote forms from
+// and the printer writes as 'x and #'x.
+const (
+	NameQuote    = "QUOTE"
+	NameFunction = "FUNCTION"
+)
+
 // NewPackages returns a set with the standard packages: COMMON-LISP, with the
-// symbols NIL and T exported, KEYWORD, and COMMON-LISP-USER, which uses
-// COMMON-LISP.
+// symbols NIL, T, QUOTE and FUNCTION exported, KEYWORD, and COMMON-LISP-USER,
+// which uses COMMON-LISP.
 func NewPackages() *Packages {
 	ps := &Packages{
 		byName: map[string]*Package{},
@@ -153,7 +160,7 @@ func NewPackages() *Packages {
 	ps.kw, _ = ps.Make(NameKeyword, nil, nil)
 	ps.kw.exportNew = true
 	ps.user, _ = ps.Make(NameUser, []string{NicknameUser}, []*Package{ps.cl})
-	for _, name := range []string{"NIL", "T"} {
+	for _, name := range []string{"NIL", "T", NameQuote, NameFunction} {
 		sym, _ := ps.cl.Intern(name)
 		_ = ps.cl.Export(sym)
 	}

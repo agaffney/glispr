@@ -18,7 +18,6 @@ func TestExpressionType(t *testing.T) {
 	}{
 		{types.Nil, types.ExpressionTypeNull},
 		{types.NewCons(types.Nil, types.Nil), types.ExpressionTypeCons},
-		{types.NewLiteral(types.NewSymbol("a")), types.ExpressionTypeLiteral},
 		{types.NewString("a"), types.ExpressionTypeString},
 		{types.NewNumberInteger(big.NewInt(1)), types.ExpressionTypeNumber},
 		{types.NewSymbol("a"), types.ExpressionTypeSymbol},
@@ -69,8 +68,6 @@ func TestExpressionString(t *testing.T) {
 		},
 		{types.NewCons(types.Nil, types.Nil), `(())`},
 		{(*types.Cons)(nil), `<nil>`},
-		{types.NewLiteral(types.NewSymbol("foo")), `'#:|foo|`},
-		{types.NewLiteral(types.NewList(nil)), `'()`},
 		{types.NewString("foo bar"), `"foo bar"`},
 		{types.NewString(""), `""`},
 		{types.NewString(`a"b`), `"a\"b"`},
@@ -135,7 +132,6 @@ func TestAccessors(t *testing.T) {
 	sym := types.NewSymbol("foo")
 	assert.Equal(t, "foo", sym.Name())
 	assert.Equal(t, "foo", types.NewString("foo").Value())
-	assert.Same(t, sym, types.NewLiteral(sym).Item())
 
 	cons := types.NewCons(sym, types.Nil)
 	assert.Same(t, sym, cons.Car())
