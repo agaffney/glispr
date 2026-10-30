@@ -2037,9 +2037,13 @@ func TestReaderFormatRoundTrip(t *testing.T) {
 	}
 }
 
-// TestReaderFormatEveryCharacter checks every code point, so that what Format
-// escapes can't drift from what the standard readtable accepts.
+// TestReaderFormatEveryCharacter checks every code point in a symbol name and a
+// string, so that what Format escapes can't drift from what the standard
+// readtable accepts.
 func TestReaderFormatEveryCharacter(t *testing.T) {
+	if testing.Short() {
+		t.Skip("reads over a million code points")
+	}
 	r := newTestReader()
 	for c := rune(0); c <= unicode.MaxRune; c++ {
 		if !utf8.ValidRune(c) {
@@ -2056,6 +2060,19 @@ func TestReaderFormatEveryCharacter(t *testing.T) {
 		}
 		sym, ok := got.(*types.Symbol)
 		if !assert.True(t, ok && sym.Name() == name && sym.Package() == nil, "character %#x: %q read as %v", c, text, got) {
+			t.FailNow()
+		}
+
+		// A string with the same character
+		text = types.Format(types.NewString(name), nil)
+		i, err = reader.NewInput(strings.NewReader(text))
+		assert.NoError(t, err)
+		got, err = r.Read(i)
+		if !assert.NoError(t, err, "character %#x: %q", c, text) {
+			t.FailNow()
+		}
+		str, ok := got.(*types.String)
+		if !assert.True(t, ok && str.Value() == name, "character %#x: %q read as %v", c, text, got) {
 			t.FailNow()
 		}
 	}

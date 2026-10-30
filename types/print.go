@@ -11,11 +11,11 @@ import (
 // same symbol. If current is nil, nothing is accessible and every interned
 // symbol is qualified.
 //
-// A symbol's text can be read back by a reader with the standard readtable and
-// the default case mode, Upcase. The one symbol that does not read back as
-// itself is COMMON-LISP:NIL, which the reader returns as Nil instead. The text
-// of other expressions is not guaranteed to read back: a string is printed
-// without escaping any quotes or backslashes in it.
+// The text of an expression the reader can produce can be read back by a reader
+// with the standard readtable and the default case mode, Upcase. The one symbol
+// that does not read back as itself is COMMON-LISP:NIL, which the reader returns
+// as Nil instead. A value the reader can't produce prints as diagnostic text
+// that it can't read back, such as <nil> for a nil *Cons.
 func Format(e Expression, current *Package) string {
 	var sb strings.Builder
 	writeExpr(&sb, e, current)

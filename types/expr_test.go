@@ -72,6 +72,13 @@ func TestExpressionString(t *testing.T) {
 		{types.NewLiteral(types.NewSymbol("foo")), `'#:|foo|`},
 		{types.NewLiteral(types.NewList(nil)), `'()`},
 		{types.NewString("foo bar"), `"foo bar"`},
+		{types.NewString(""), `""`},
+		{types.NewString(`a"b`), `"a\"b"`},
+		{types.NewString(`a\b`), `"a\\b"`},
+		{types.NewString(`\"`), `"\\\""`},
+		{types.NewString(`"`), `"\""`},
+		{types.NewString("a\nb"), "\"a\nb\""},
+		{types.NewString("a'(;|#b"), `"a'(;|#b"`},
 		{types.NewSymbol("foo"), `#:|foo|`},
 	}
 	for _, testDef := range testDefs {

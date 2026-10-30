@@ -1,7 +1,6 @@
 package types
 
 import (
-	"fmt"
 	"math/big"
 	"slices"
 	"strconv"
@@ -160,8 +159,13 @@ func NewString(val string) *String {
 
 func (String) Type() ExpressionType { return ExpressionTypeString }
 
+// stringEscaper writes a \ before the two characters that mean something inside
+// a string in reader syntax.
+var stringEscaper = strings.NewReplacer(`"`, `\"`, `\`, `\\`)
+
+// String returns the string in reader syntax.
 func (s String) String() string {
-	return fmt.Sprintf(`"%s"`, s.val)
+	return `"` + stringEscaper.Replace(s.val) + `"`
 }
 
 func (s String) Value() string { return s.val }
