@@ -19,6 +19,15 @@ import (
 // so that a symbol read has the same identity as the one expected.
 var testPackages = types.NewPackages()
 
+// testForm returns the list of the symbol with the given name in COMMON-LISP and
+// x, such as (QUOTE x).
+func testForm(name string, x types.Expression) types.Expression {
+	sym, _ := testPackages.CommonLisp().Find(name)
+	return types.NewList([]types.Expression{sym, x})
+}
+
+func testQuote(x types.Expression) types.Expression { return testForm(types.NameQuote, x) }
+
 func newTestReader() *reader.Reader { return reader.NewReader(testPackages) }
 
 // testSym returns the symbol with the given name in COMMON-LISP-USER.
@@ -295,7 +304,7 @@ func TestReaderEmptyMultipleEscapeTerminators(t *testing.T) {
 		{`\a||`, []types.Expression{sym("a")}},
 		{`||\a`, []types.Expression{sym("a")}},
 		// Ended by a terminating macro character other than a close paren
-		{`||'a`, []types.Expression{sym(""), types.NewLiteral(sym("A"))}},
+		{`||'a`, []types.Expression{sym(""), testQuote(sym("A"))}},
 		{`||"a"`, []types.Expression{sym(""), types.NewString("a")}},
 		{`||;c`, []types.Expression{sym("")}},
 		{`||(a)`, []types.Expression{sym(""), types.NewList([]types.Expression{sym("A")})}},
@@ -492,7 +501,7 @@ func TestReaderVector(t *testing.T) {
 		// In other expressions
 		{`(#(1) 2)`, []types.Expression{types.NewList([]types.Expression{vec(num(1)), num(2)})}},
 		{`(a . #(b))`, []types.Expression{types.NewListTail([]types.Expression{sym("A")}, vec(sym("B")))}},
-		{`'#(a)`, []types.Expression{types.NewLiteral(vec(sym("A")))}},
+		{`'#(a)`, []types.Expression{testQuote(vec(sym("A")))}},
 		// Dots in tokens are not the dot
 		{`#(a.b .c)`, []types.Expression{vec(sym("A.B"), sym(".C"))}},
 		{`#(\. |.|)`, []types.Expression{vec(sym("."), sym("."))}},
@@ -695,7 +704,7 @@ func TestReaderCharacter(t *testing.T) {
 		{`#\a;comment`, []types.Expression{char('a')}},
 		{`#\Space;comment`, []types.Expression{char(' ')}},
 		{`#\a"b"`, []types.Expression{char('a'), types.NewString("b")}},
-		{`#\a'b`, []types.Expression{char('a'), types.NewLiteral(testSym("B"))}},
+		{`#\a'b`, []types.Expression{char('a'), testQuote(testSym("B"))}},
 		{`#\a(b)`, []types.Expression{char('a'), types.NewList([]types.Expression{testSym("B")})}},
 		{`#\a #\b`, []types.Expression{char('a'), char('b')}},
 		// Characters in other expressions
@@ -705,7 +714,7 @@ func TestReaderCharacter(t *testing.T) {
 		{`(#\()`, []types.Expression{types.NewList([]types.Expression{char('(')})}},
 		{`(#\))`, []types.Expression{types.NewList([]types.Expression{char(')')})}},
 		{`(a . #\b)`, []types.Expression{types.NewListTail([]types.Expression{testSym("A")}, char('b'))}},
-		{`'#\a`, []types.Expression{types.NewLiteral(char('a'))}},
+		{`'#\a`, []types.Expression{testQuote(char('a'))}},
 	}
 	r := newTestReader()
 	for _, testDef := range testDefs {
@@ -825,7 +834,7 @@ func TestReaderRubout(t *testing.T) {
 		}},
 		{"( \x7f)", []types.Expression{types.Nil}},
 		{"(a\x7f)", []types.Expression{types.NewList([]types.Expression{sym("A")})}},
-		{"'\x7fa", []types.Expression{types.NewLiteral(sym("A"))}},
+		{"'\x7fa", []types.Expression{testQuote(sym("A"))}},
 		{"(\x7f(\x7f)\x7f)", []types.Expression{
 			types.NewList([]types.Expression{types.Nil}),
 		}},
@@ -923,42 +932,64 @@ func TestReaderList(t *testing.T) {
 	}
 }
 
-func TestReaderLiteral(t *testing.T) {
+func TestReaderQuote(t *testing.T) {
+	sym := testSym
+	exprs := func(e ...types.Expression) []types.Expression { return e }
+	fn := func(x types.Expression) types.Expression { return testForm(types.NameFunction, x) }
 	testDefs := []struct {
-		input        string
-		expectedItem types.Expression
+		input string
+		want  types.Expression
 	}{
-		{
-			input:        `'foo`,
-			expectedItem: testSym("FOO"),
-		},
-		{
-			input: `'(foo bar)`,
-			expectedItem: types.NewList(
-				[]types.Expression{
-					testSym("FOO"),
-					testSym("BAR"),
-				},
-			),
-		},
+		{`'foo`, testQuote(sym("FOO"))},
+		{`'(foo bar)`, testQuote(types.NewList(exprs(sym("FOO"), sym("BAR"))))},
+		{`''a`, testQuote(testQuote(sym("A")))},
+		{`' a`, testQuote(sym("A"))},
+		{"'\n;c\na", testQuote(sym("A"))},
+		{`'()`, testQuote(types.Nil)},
+		{`'nil`, testQuote(types.Nil)},
+		{`'1`, testQuote(types.NewNumberInteger(big.NewInt(1)))},
+		{`'"s"`, testQuote(types.NewString("s"))},
+		{`'(a . b)`, testQuote(types.NewListTail(exprs(sym("A")), sym("B")))},
+		{`#'foo`, fn(sym("FOO"))},
+		{`#'(lambda (x) x)`, fn(types.NewList(exprs(
+			sym("LAMBDA"), types.NewList(exprs(sym("X"))), sym("X"),
+		)))},
+		{`#' foo`, fn(sym("FOO"))},
+		{`#''a`, fn(testQuote(sym("A")))},
+		{`'#'a`, testQuote(fn(sym("A")))},
+		{`(a 'b #'c)`, types.NewList(exprs(sym("A"), testQuote(sym("B")), fn(sym("C"))))},
 	}
-	r := newTestReader()
 	for _, testDef := range testDefs {
-		i, err := reader.NewInput(
-			strings.NewReader(testDef.input),
-		)
-		if err != nil {
-			t.Errorf("unexpected error: %s", err)
-			continue
-		}
-		tmp, err := r.Read(i)
-		if err != nil {
-			t.Errorf("unexpected error: %s", err)
-			continue
-		}
-		assert.IsType(t, &types.Literal{}, tmp, "did not get expected expression type for input: %s", testDef.input)
-		tmpItem := tmp.(*types.Literal).Item()
-		assert.Equal(t, testDef.expectedItem, tmpItem, "literal item does not match expected value for input: %s", testDef.input)
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+		got, err := newTestReader().Read(i)
+		assert.NoError(t, err, "input %q", testDef.input)
+		assert.Equal(t, testDef.want, got, "input %q", testDef.input)
+	}
+
+	// The symbols are the ones in COMMON-LISP, whatever the current package is
+	ps := types.NewPackages()
+	other, err := ps.Make("OTHER", nil, nil)
+	assert.NoError(t, err)
+	r := reader.NewReader(ps)
+	r.Package = other
+	i, err := reader.NewInput(strings.NewReader(`'a`))
+	assert.NoError(t, err)
+	got, err := r.Read(i)
+	assert.NoError(t, err)
+	items, ok := types.ListItems(got)
+	assert.True(t, ok)
+	assert.Len(t, items, 2)
+	quote, _ := ps.CommonLisp().Find(types.NameQuote)
+	assert.Same(t, quote, items[0])
+
+	for _, input := range []string{"'", "' ", "#'", "#' ", "'; comment", "(')", "(#')", "(a . ')", "#'#'"} {
+		i, err := reader.NewInput(strings.NewReader(input))
+		assert.NoError(t, err)
+		_, err = newTestReader().Read(i)
+		assert.Error(t, err, "input %q", input)
+		var rerr reader.ReaderError
+		assert.ErrorAs(t, err, &rerr, "input %q", input)
 	}
 }
 
@@ -1568,8 +1599,8 @@ func TestReaderDottedList(t *testing.T) {
 		{`(a \.\. b)`, list(exprs(sym("A"), sym(".."), sym("B")))},
 		{`(a . \.)`, tail(exprs(sym("A")), sym("."))},
 		// The tail and the items can be quoted
-		{`(a . 'b)`, tail(exprs(sym("A")), types.NewLiteral(sym("B")))},
-		{`('a . b)`, tail(exprs(types.NewLiteral(sym("A"))), sym("B"))},
+		{`(a . 'b)`, tail(exprs(sym("A")), testQuote(sym("B")))},
+		{`('a . b)`, tail(exprs(testQuote(sym("A"))), sym("B"))},
 		// A list in the tail makes the whole list proper
 		{`(a . (b c))`, list(exprs(sym("A"), sym("B"), sym("C")))},
 		{`(a . ())`, list(exprs(sym("A")))},
@@ -2075,5 +2106,62 @@ func TestReaderFormatEveryCharacter(t *testing.T) {
 		if !assert.True(t, ok && str.Value() == name, "character %#x: %q read as %v", c, text, got) {
 			t.FailNow()
 		}
+	}
+}
+
+func TestReaderQuoteRoundTrip(t *testing.T) {
+	ps := types.NewPackages()
+	lib, err := ps.Make("LIB", nil, nil)
+	assert.NoError(t, err)
+	libQuote, _ := lib.Intern(types.NameQuote)
+	cl := ps.CommonLisp()
+	quote, _ := cl.Find(types.NameQuote)
+	function, _ := cl.Find(types.NameFunction)
+	a, _ := ps.User().Intern("A")
+	list := func(items ...types.Expression) types.Expression { return types.NewList(items) }
+
+	for _, expr := range []types.Expression{
+		list(quote, a),
+		list(function, a),
+		list(quote, list(quote, list(function, a))),
+		list(a, list(quote, types.Nil), types.NewVector([]types.Expression{list(function, a)})),
+		list(quote),
+		list(quote, a, a),
+		types.NewCons(quote, a),
+		list(libQuote, a),
+		list(types.Nil, list(quote, types.Nil)),
+	} {
+		for _, current := range []*types.Package{nil, ps.User(), lib} {
+			text := types.Format(expr, current)
+			r := reader.NewReader(ps)
+			if current != nil {
+				r.Package = current
+			}
+			i, err := reader.NewInput(strings.NewReader(text))
+			assert.NoError(t, err)
+			got, err := r.Read(i)
+			assert.NoError(t, err, "text %q", text)
+			assert.Equal(t, expr, got, "text %q", text)
+		}
+	}
+}
+
+func TestReaderQuotePackage(t *testing.T) {
+	// The current package isn't used, so only a missing set is an error
+	foreign := types.NewPackages().User()
+	for _, input := range []string{"'1", "#'1", "'(1)"} {
+		r := newTestReader()
+		r.Package = foreign
+		i, err := reader.NewInput(strings.NewReader(input))
+		assert.NoError(t, err)
+		_, err = r.Read(i)
+		assert.NoError(t, err, "input %q", input)
+
+		r = newTestReader()
+		r.Packages = nil
+		i, err = reader.NewInput(strings.NewReader(input))
+		assert.NoError(t, err)
+		_, err = r.Read(i)
+		assert.ErrorContains(t, err, "no package set", "input %q", input)
 	}
 }

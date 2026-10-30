@@ -159,11 +159,52 @@ func TestFormatNested(t *testing.T) {
 	assert.Equal(t, `(A #(LIB::B :K) . LIB::B)`, types.Format(list, ps.User()))
 	assert.Equal(t, `(COMMON-LISP-USER::A #(LIB::B :K) . LIB::B)`, types.Format(list, nil))
 	assert.Equal(t, `(COMMON-LISP-USER::A #(LIB::B :K) . LIB::B)`, list.String())
-	assert.Equal(t, `'A`, types.Format(types.NewLiteral(a), ps.User()))
-	assert.Equal(t, `'COMMON-LISP-USER::A`, types.NewLiteral(a).String())
 
 	// Other expressions print as they always do
 	assert.Equal(t, `()`, types.Format(types.Nil, ps.User()))
 	assert.Equal(t, `"s"`, types.Format(types.NewString("s"), ps.User()))
 	assert.Equal(t, `#\a`, types.Format(types.NewCharacter('a'), ps.User()))
+}
+
+func TestFormatQuote(t *testing.T) {
+	ps := types.NewPackages()
+	lib, err := ps.Make("LIB", nil, nil)
+	assert.NoError(t, err)
+	quote, _ := ps.CommonLisp().Find(types.NameQuote)
+	function, _ := ps.CommonLisp().Find(types.NameFunction)
+	libQuote, _ := lib.Intern(types.NameQuote)
+	a, _ := ps.User().Intern("A")
+	b, _ := ps.User().Intern("B")
+	list := func(items ...types.Expression) types.Expression { return types.NewList(items) }
+
+	testDefs := []struct {
+		expr types.Expression
+		want string
+	}{
+		{list(quote, a), `'A`},
+		{list(function, a), `#'A`},
+		{list(quote, list(quote, a)), `''A`},
+		{list(quote, list(function, a)), `'#'A`},
+		{list(quote, list(a, b)), `'(A B)`},
+		{list(quote, types.Nil), `'()`},
+		{list(a, list(quote, b)), `(A 'B)`},
+		{types.NewVector([]types.Expression{list(quote, a)}), `#('A)`},
+		{types.NewCons(a, list(quote, b)), `(A QUOTE B)`},
+		{list(quote, types.NewCons(a, b)), `'(A . B)`},
+		// Anything that isn't exactly the symbol and one item is a plain list
+		{list(quote), `(QUOTE)`},
+		{list(quote, a, b), `(QUOTE A B)`},
+		{types.NewCons(quote, a), `(QUOTE . A)`},
+		{types.NewListTail([]types.Expression{quote, a}, b), `(QUOTE A . B)`},
+		{list(function, a, b), `(FUNCTION A B)`},
+		// A symbol with that name from elsewhere isn't the quote symbol
+		{list(libQuote, a), `(LIB::QUOTE A)`},
+		{list(types.NewSymbol(types.NameQuote), a), `(#:QUOTE A)`},
+		{list(a, a), `(A A)`},
+	}
+	for _, testDef := range testDefs {
+		assert.Equal(t, testDef.want, types.Format(testDef.expr, ps.User()))
+	}
+	assert.Equal(t, `'COMMON-LISP-USER::A`, list(quote, a).String())
+	assert.Equal(t, `(COMMON-LISP:QUOTE)`, list(quote).String())
 }

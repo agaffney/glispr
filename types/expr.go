@@ -18,7 +18,6 @@ const (
 	ExpressionTypeNone ExpressionType = iota
 	ExpressionTypeNull
 	ExpressionTypeCons
-	ExpressionTypeLiteral
 	ExpressionTypeString
 	ExpressionTypeNumber
 	ExpressionTypeSymbol
@@ -127,24 +126,6 @@ func ListItems(expr Expression) ([]Expression, bool) {
 			return nil, false
 		}
 	}
-}
-
-type Literal struct {
-	item Expression
-}
-
-func NewLiteral(item Expression) *Literal {
-	return &Literal{
-		item: item,
-	}
-}
-
-func (Literal) Type() ExpressionType { return ExpressionTypeLiteral }
-
-func (l Literal) String() string { return Format(&l, nil) }
-
-func (l Literal) Item() Expression {
-	return l.item
 }
 
 type String struct {
