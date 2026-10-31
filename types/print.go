@@ -18,11 +18,12 @@ import (
 // that it can't read back, such as <nil> for a nil *Cons.
 func Format(e Expression, current *Package) string {
 	var sb strings.Builder
-	writeExpr(&sb, e, current)
+	writeExpr(&sb, e, current, 0)
 	return sb.String()
 }
 
-func writeExpr(sb *strings.Builder, e Expression, current *Package) {
+// writeExpr writes e, which is inside depth levels of backquote.
+func writeExpr(sb *strings.Builder, e Expression, current *Package, depth int) {
 	switch v := e.(type) {
 	case *Symbol:
 		writeSymbol(sb, v, current)
@@ -31,13 +32,19 @@ func writeExpr(sb *strings.Builder, e Expression, current *Package) {
 			sb.WriteString("<nil>")
 			return
 		}
-		if prefix, item, ok := quoteForm(v); ok {
-			sb.WriteString(prefix)
-			writeExpr(sb, item, current)
+		if form, item, ok := prefixFormOf(v, depth); ok {
+			var inner strings.Builder
+			writeExpr(&inner, item, current, depth+form.delta)
+			sb.WriteString(form.prefix)
+			// ,@ and ,. are the splicing forms when they follow a comma
+			if form.prefix == "," && (strings.HasPrefix(inner.String(), "@") || strings.HasPrefix(inner.String(), ".")) {
+				sb.WriteString(" ")
+			}
+			sb.WriteString(inner.String())
 			return
 		}
 		sb.WriteString("(")
-		writeExpr(sb, v.car, current)
+		writeExpr(sb, v.car, current, depth)
 		rest := v.cdr
 		for {
 			next, ok := rest.(*Cons)
@@ -45,12 +52,12 @@ func writeExpr(sb *strings.Builder, e Expression, current *Package) {
 				break
 			}
 			sb.WriteString(" ")
-			writeExpr(sb, next.car, current)
+			writeExpr(sb, next.car, current, depth)
 			rest = next.cdr
 		}
 		if rest != Nil {
 			sb.WriteString(" . ")
-			writeExpr(sb, rest, current)
+			writeExpr(sb, rest, current, depth)
 		}
 		sb.WriteString(")")
 	case *Vector:
@@ -59,7 +66,7 @@ func writeExpr(sb *strings.Builder, e Expression, current *Package) {
 			if i > 0 {
 				sb.WriteString(" ")
 			}
-			writeExpr(sb, item, current)
+			writeExpr(sb, item, current, depth)
 		}
 		sb.WriteString(")")
 	default:
@@ -67,22 +74,38 @@ func writeExpr(sb *strings.Builder, e Expression, current *Package) {
 	}
 }
 
-// quoteForm reports whether c is a list of COMMON-LISP:QUOTE or FUNCTION and one
-// item, which are written as a prefix and the item. A symbol with one of those
-// names in another package doesn't count.
-func quoteForm(c *Cons) (prefix string, item Expression, ok bool) {
+// prefixForm is a list of a symbol and one item that is written as a prefix and
+// the item, with delta as the change in backquote depth inside the item.
+type prefixForm struct {
+	pkg, name, prefix string
+	delta             int
+}
+
+var prefixForms = []prefixForm{
+	{NameCommonLisp, NameQuote, "'", 0},
+	{NameCommonLisp, NameFunction, "#'", 0},
+	{NameGlispr, NameQuasiquote, "`", 1},
+	{NameGlispr, NameUnquote, ",", -1},
+	{NameGlispr, NameUnquoteSplicing, ",@", -1},
+	{NameGlispr, NameUnquoteNSplicing, ",.", -1},
+}
+
+// prefixFormOf reports whether c is one of prefixForms, and returns it and the
+// item. A symbol with one of those names in another package doesn't count, and
+// neither does a comma form outside of a backquote, as the reader would reject
+// it. depth is the number of backquotes that c is inside.
+func prefixFormOf(c *Cons, depth int) (prefixForm, Expression, bool) {
 	sym, isSym := c.car.(*Symbol)
 	rest, isCons := c.cdr.(*Cons)
-	if !isSym || !isCons || rest.cdr != Nil || sym.pkg == nil || sym.pkg.name != NameCommonLisp {
-		return "", nil, false
+	if !isSym || !isCons || rest.cdr != Nil || sym.pkg == nil {
+		return prefixForm{}, nil, false
 	}
-	switch sym.name {
-	case NameQuote:
-		return "'", rest.car, true
-	case NameFunction:
-		return "#'", rest.car, true
+	for _, form := range prefixForms {
+		if sym.pkg.name == form.pkg && sym.name == form.name && (form.delta >= 0 || depth > 0) {
+			return form, rest.car, true
+		}
 	}
-	return "", nil, false
+	return prefixForm{}, nil, false
 }
 
 func writeSymbol(sb *strings.Builder, sym *Symbol, current *Package) {

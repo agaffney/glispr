@@ -2118,7 +2118,17 @@ func TestReaderQuoteRoundTrip(t *testing.T) {
 	quote, _ := cl.Find(types.NameQuote)
 	function, _ := cl.Find(types.NameFunction)
 	a, _ := ps.User().Intern("A")
+	atSym, _ := ps.User().Intern("@A")
+	dotSym, _ := ps.User().Intern(".A")
 	list := func(items ...types.Expression) types.Expression { return types.NewList(items) }
+	glisp := func(name string) *types.Symbol {
+		sym, _ := ps.Glispr().Find(name)
+		return sym
+	}
+	bq := func(x types.Expression) types.Expression { return list(glisp(types.NameQuasiquote), x) }
+	uq := func(x types.Expression) types.Expression { return list(glisp(types.NameUnquote), x) }
+	splice := func(x types.Expression) types.Expression { return list(glisp(types.NameUnquoteSplicing), x) }
+	nsplice := func(x types.Expression) types.Expression { return list(glisp(types.NameUnquoteNSplicing), x) }
 
 	for _, expr := range []types.Expression{
 		list(quote, a),
@@ -2130,6 +2140,24 @@ func TestReaderQuoteRoundTrip(t *testing.T) {
 		types.NewCons(quote, a),
 		list(libQuote, a),
 		list(types.Nil, list(quote, types.Nil)),
+		bq(list(a, uq(a), splice(a), nsplice(a))),
+		bq(list(a, bq(list(uq(list(a, uq(a))))))),
+		bq(types.NewVector([]types.Expression{uq(a)})),
+		bq(types.NewCons(a, uq(a))),
+		// Not forms the reader would accept, so they print as plain lists
+		uq(a),
+		list(a, splice(a)),
+		bq(uq(uq(a))),
+		list(uq(a), bq(uq(a))),
+		bq(list(quote, uq(list(function, atSym)))),
+		// A symbol that could be read as part of the comma
+		bq(uq(atSym)),
+		bq(uq(dotSym)),
+		bq(splice(atSym)),
+		bq(nsplice(dotSym)),
+		bq(list(uq(types.NewVector(nil)), uq(list(a)))),
+		list(glisp("QUASIQUOTE")),
+		list(glisp("QUASIQUOTE"), a, a),
 	} {
 		for _, current := range []*types.Package{nil, ps.User(), lib} {
 			text := types.Format(expr, current)
@@ -2164,4 +2192,133 @@ func TestReaderQuotePackage(t *testing.T) {
 		_, err = r.Read(i)
 		assert.ErrorContains(t, err, "no package set", "input %q", input)
 	}
+}
+
+func TestReaderBackquote(t *testing.T) {
+	sym := testSym
+	exprs := func(e ...types.Expression) []types.Expression { return e }
+	list := func(e ...types.Expression) types.Expression { return types.NewList(e) }
+	form := func(name string, x types.Expression) types.Expression {
+		s, _ := testPackages.Glispr().Find(name)
+		return list(s, x)
+	}
+	bq := func(x types.Expression) types.Expression { return form(types.NameQuasiquote, x) }
+	uq := func(x types.Expression) types.Expression { return form(types.NameUnquote, x) }
+	splice := func(x types.Expression) types.Expression { return form(types.NameUnquoteSplicing, x) }
+	nsplice := func(x types.Expression) types.Expression { return form(types.NameUnquoteNSplicing, x) }
+
+	testDefs := []struct {
+		input string
+		want  types.Expression
+	}{
+		{"`a", bq(sym("A"))},
+		{"` a", bq(sym("A"))},
+		{"`()", bq(types.Nil)},
+		{"`(a b)", bq(list(sym("A"), sym("B")))},
+		{"`,a", bq(uq(sym("A")))},
+		{"`,@a", bq(splice(sym("A")))},
+		{"`,.a", bq(nsplice(sym("A")))},
+		{"`(a ,b ,@c ,.d)", bq(list(sym("A"), uq(sym("B")), splice(sym("C")), nsplice(sym("D"))))},
+		{"`(a . ,b)", bq(types.NewListTail(exprs(sym("A")), uq(sym("B"))))},
+		{"`#(a ,b)", bq(types.NewVector(exprs(sym("A"), uq(sym("B")))))},
+		{"`(a ,(b c))", bq(list(sym("A"), uq(list(sym("B"), sym("C")))))},
+		{"`(a ,'b)", bq(list(sym("A"), uq(testQuote(sym("B")))))},
+		{"'`a", testQuote(bq(sym("A")))},
+		{"`'a", bq(testQuote(sym("A")))},
+		// Whitespace and comments after the prefix, and what follows , and ,@
+		{"`, a", bq(uq(sym("A")))},
+		{"`,@ a", bq(splice(sym("A")))},
+		{"`, @a", bq(uq(sym("@A")))},
+		{"`,;c\na", bq(uq(sym("A")))},
+		// A . after a comma is the splice, even when it could start a number
+		{"`,.5", bq(nsplice(types.NewNumberInteger(big.NewInt(5))))},
+		{"`, .a", bq(uq(sym(".A")))},
+		// Each comma ends one level of backquote
+		{"`(a `(b ,(c ,d)))", bq(list(sym("A"), bq(list(sym("B"), uq(list(sym("C"), uq(sym("D"))))))))},
+		{"``,,a", bq(bq(uq(uq(sym("A")))))},
+		{"`(,a `,,b)", bq(list(uq(sym("A")), bq(uq(uq(sym("B"))))))},
+		// After the backquote ends, commas are errors again, so this is two forms
+		{"(`a)", list(bq(sym("A")))},
+	}
+	for _, testDef := range testDefs {
+		i, err := reader.NewInput(strings.NewReader(testDef.input))
+		assert.NoError(t, err)
+		got, err := newTestReader().Read(i)
+		assert.NoError(t, err, "input %q", testDef.input)
+		assert.Equal(t, testDef.want, got, "input %q", testDef.input)
+	}
+
+	invalid := []struct {
+		input string
+		msg   string
+	}{
+		{",a", "not inside a backquote"},
+		{",@a", "not inside a backquote"},
+		{",.a", "not inside a backquote"},
+		{",", "not inside a backquote"},
+		{"(,a)", "not inside a backquote"},
+		// Too many commas for the backquotes
+		{"`,,a", "not inside a backquote"},
+		{"`(,(a ,b))", "not inside a backquote"},
+		{"`(a ,,b)", "not inside a backquote"},
+		{"`(,@,a)", "not inside a backquote"},
+		{"``,,,a", "not inside a backquote"},
+		// A quote doesn't start a backquote
+		{"`'(,a ,,b)", "not inside a backquote"},
+		{"`", "end of file"},
+		{"` ", "end of file"},
+		{"`,", "end of file"},
+		{"`,@", "end of file"},
+		{"`,.", "end of file"},
+		{"`(,)", "unmatched close"},
+		{"`(,@)", "unmatched close"},
+		{"`)", "unmatched close"},
+		{"`(a . )", "nothing after dot"},
+	}
+	for _, tc := range invalid {
+		_, err := newTestReader().Read(mustInput(t, tc.input))
+		assert.ErrorContains(t, err, tc.msg, "input %q", tc.input)
+		var rerr reader.ReaderError
+		assert.ErrorAs(t, err, &rerr, "input %q", tc.input)
+	}
+
+	// The depth is back to zero after an error, and after a success
+	r := newTestReader()
+	for _, input := range []string{"`(a ,,b)", "`,@", "`(a ,b)", "`(a ,(b ,c))"} {
+		_, _ = r.Read(mustInput(t, input))
+		_, err := r.Read(mustInput(t, ",x"))
+		assert.ErrorContains(t, err, "not inside a backquote", "after %q", input)
+	}
+	_, err := r.Read(mustInput(t, "`,x"))
+	assert.NoError(t, err)
+}
+
+func mustInput(t *testing.T, text string) *reader.Input {
+	i, err := reader.NewInput(strings.NewReader(text))
+	assert.NoError(t, err)
+	return i
+}
+
+func TestReaderBackquotePackages(t *testing.T) {
+	// The symbols are in GLISPR, whatever the current package is
+	ps := types.NewPackages()
+	other, err := ps.Make("OTHER", nil, nil)
+	assert.NoError(t, err)
+	r := reader.NewReader(ps)
+	r.Package = other
+	got, err := r.Read(mustInput(t, "`(,a)"))
+	assert.NoError(t, err)
+	items, _ := types.ListItems(got)
+	quasi, _ := ps.Glispr().Find(types.NameQuasiquote)
+	assert.Same(t, quasi, items[0])
+
+	// Only the package set is needed, not the current package
+	r = reader.NewReader(ps)
+	r.Package = types.NewPackages().User()
+	_, err = r.Read(mustInput(t, "`,1"))
+	assert.NoError(t, err)
+	r = reader.NewReader(ps)
+	r.Packages = nil
+	_, err = r.Read(mustInput(t, "`1"))
+	assert.ErrorContains(t, err, "no package set")
 }

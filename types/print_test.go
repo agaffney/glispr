@@ -208,3 +208,62 @@ func TestFormatQuote(t *testing.T) {
 	assert.Equal(t, `'COMMON-LISP-USER::A`, list(quote, a).String())
 	assert.Equal(t, `(COMMON-LISP:QUOTE)`, list(quote).String())
 }
+
+func TestFormatBackquote(t *testing.T) {
+	ps := types.NewPackages()
+	glispr := func(name string) *types.Symbol {
+		sym, _ := ps.Glispr().Find(name)
+		return sym
+	}
+	a, _ := ps.User().Intern("A")
+	at, _ := ps.User().Intern("@A")
+	dot, _ := ps.User().Intern(".A")
+	list := func(items ...types.Expression) types.Expression { return types.NewList(items) }
+	bq := func(x types.Expression) types.Expression { return list(glispr(types.NameQuasiquote), x) }
+	uq := func(x types.Expression) types.Expression { return list(glispr(types.NameUnquote), x) }
+	splice := func(x types.Expression) types.Expression { return list(glispr(types.NameUnquoteSplicing), x) }
+	nsplice := func(x types.Expression) types.Expression { return list(glispr(types.NameUnquoteNSplicing), x) }
+
+	testDefs := []struct {
+		expr types.Expression
+		want string
+	}{
+		{bq(a), "`A"},
+		{bq(uq(a)), "`,A"},
+		{bq(splice(a)), "`,@A"},
+		{bq(nsplice(a)), "`,.A"},
+		{bq(list(a, uq(a), splice(a), nsplice(a))), "`(A ,A ,@A ,.A)"},
+		// The tail of (a . ,a) is the list (unquote a), so it prints as the
+		// elements of a list, which reads back as the same structure
+		{bq(types.NewCons(a, uq(a))), "`(A GLISPR:UNQUOTE A)"},
+		{bq(types.NewVector([]types.Expression{uq(a)})), "`#(,A)"},
+		{bq(list(a, bq(uq(uq(a))))), "`(A `,,A)"},
+		// Each comma ends one level of backquote, and any more are plain lists
+		{bq(uq(uq(a))), "`,(GLISPR:UNQUOTE A)"},
+		{uq(a), "(GLISPR:UNQUOTE A)"},
+		{splice(a), "(GLISPR:UNQUOTE-SPLICING A)"},
+		{list(a, nsplice(a)), "(A (GLISPR:UNQUOTE-NSPLICING A))"},
+		{bq(list(a, bq(a), uq(a))), "`(A `A ,A)"},
+		// The comma forms are checked within a backquote that wasn't closed
+		{list(bq(a), uq(a)), "(`A (GLISPR:UNQUOTE A))"},
+		// A space keeps a symbol starting with @ or . from joining the comma
+		{bq(uq(at)), "`, @A"},
+		{bq(uq(dot)), "`, .A"},
+		{bq(splice(at)), "`,@@A"},
+		{bq(nsplice(dot)), "`,..A"},
+		// Anything but the symbol and one item is a plain list
+		{list(glispr(types.NameQuasiquote)), "(GLISPR:QUASIQUOTE)"},
+		{list(glispr(types.NameQuasiquote), a, a), "(GLISPR:QUASIQUOTE A A)"},
+		{bq(list(glispr(types.NameUnquote))), "`(GLISPR:UNQUOTE)"},
+		{bq(list(glispr(types.NameUnquote), a, a)), "`(GLISPR:UNQUOTE A A)"},
+		{bq(types.NewCons(glispr(types.NameUnquote), a)), "`(GLISPR:UNQUOTE . A)"},
+		// Only the GLISPR symbols count
+		{list(types.NewSymbol(types.NameQuasiquote), a), "(#:QUASIQUOTE A)"},
+	}
+	for _, testDef := range testDefs {
+		assert.Equal(t, testDef.want, types.Format(testDef.expr, ps.User()))
+	}
+	// Without a current package every symbol is qualified, but the forms are not
+	assert.Equal(t, "`(COMMON-LISP-USER::A ,COMMON-LISP-USER::A)", types.Format(bq(list(a, uq(a))), nil))
+	assert.Equal(t, "`(COMMON-LISP-USER::A ,COMMON-LISP-USER::A)", bq(list(a, uq(a))).String())
+}

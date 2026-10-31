@@ -81,6 +81,8 @@ var StandardReadtable = Readtable{
 	MacroFuncs: map[rune]ReadtableMacroFunc{
 		'"':  readString,
 		'\'': readQuote,
+		'`':  readBackquote,
+		',':  readComma,
 		'(':  readList,
 		';':  readComment,
 		'#':  readDispatch,

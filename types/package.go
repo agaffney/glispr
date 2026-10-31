@@ -130,6 +130,7 @@ type Packages struct {
 	cl     *Package
 	user   *Package
 	kw     *Package
+	glispr *Package
 }
 
 // Names of the standard packages and their nicknames.
@@ -139,6 +140,9 @@ const (
 	NameUser           = "COMMON-LISP-USER"
 	NicknameUser       = "CL-USER"
 	NameKeyword        = "KEYWORD"
+	// NameGlispr is the package for symbols that are part of this
+	// implementation and not the standard.
+	NameGlispr = "GLISPR"
 )
 
 // Names of the symbols in COMMON-LISP that the reader makes quote forms from
@@ -148,9 +152,19 @@ const (
 	NameFunction = "FUNCTION"
 )
 
+// Names of the symbols in GLISPR that the reader makes backquote forms from and
+// the printer writes as `x, ,x, ,@x and ,.x. The standard leaves their
+// representation open.
+const (
+	NameQuasiquote       = "QUASIQUOTE"
+	NameUnquote          = "UNQUOTE"
+	NameUnquoteSplicing  = "UNQUOTE-SPLICING"
+	NameUnquoteNSplicing = "UNQUOTE-NSPLICING"
+)
+
 // NewPackages returns a set with the standard packages: COMMON-LISP, with the
-// symbols NIL, T, QUOTE and FUNCTION exported, KEYWORD, and COMMON-LISP-USER,
-// which uses COMMON-LISP.
+// symbols NIL, T, QUOTE and FUNCTION exported, KEYWORD, COMMON-LISP-USER, which
+// uses COMMON-LISP, and GLISPR, with the backquote symbols exported.
 func NewPackages() *Packages {
 	ps := &Packages{
 		byName: map[string]*Package{},
@@ -160,9 +174,14 @@ func NewPackages() *Packages {
 	ps.kw, _ = ps.Make(NameKeyword, nil, nil)
 	ps.kw.exportNew = true
 	ps.user, _ = ps.Make(NameUser, []string{NicknameUser}, []*Package{ps.cl})
+	ps.glispr, _ = ps.Make(NameGlispr, nil, nil)
 	for _, name := range []string{"NIL", "T", NameQuote, NameFunction} {
 		sym, _ := ps.cl.Intern(name)
 		_ = ps.cl.Export(sym)
+	}
+	for _, name := range []string{NameQuasiquote, NameUnquote, NameUnquoteSplicing, NameUnquoteNSplicing} {
+		sym, _ := ps.glispr.Intern(name)
+		_ = ps.glispr.Export(sym)
 	}
 	return ps
 }
@@ -175,6 +194,9 @@ func (ps *Packages) User() *Package { return ps.user }
 
 // Keyword returns the KEYWORD package.
 func (ps *Packages) Keyword() *Package { return ps.kw }
+
+// Glispr returns the GLISPR package.
+func (ps *Packages) Glispr() *Package { return ps.glispr }
 
 // Find returns the package with the given name or nickname, or nil.
 func (ps *Packages) Find(name string) *Package { return ps.byName[name] }
