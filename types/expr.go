@@ -23,6 +23,7 @@ const (
 	ExpressionTypeSymbol
 	ExpressionTypeCharacter
 	ExpressionTypeVector
+	ExpressionTypePlaceholder
 )
 
 // null is the type of the empty list. It is unexported so that Nil is the only
@@ -106,10 +107,15 @@ func NewListTail(items []Expression, tail Expression) Expression {
 
 // ListItems returns the elements of a proper list, or an empty non-nil slice
 // for Nil. The bool is false (and the slice nil) if expr is not a proper list,
-// meaning it is neither Nil nor a chain of conses ending in Nil.
+// meaning it is neither Nil nor a chain of conses ending in Nil. A list whose
+// cdrs lead back to an earlier cell is circular, so it doesn't end in Nil and is
+// not a proper list.
 func ListItems(expr Expression) ([]Expression, bool) {
 	items := []Expression{}
-	for {
+	// slow follows expr at half the speed, so that on a circular list expr catches
+	// up to it
+	slow := expr
+	for step := 0; ; step++ {
 		// Compare against Nil rather than a concrete type so that Nil is the
 		// only terminator, however it is represented
 		if expr == Nil {
@@ -123,6 +129,12 @@ func ListItems(expr Expression) ([]Expression, bool) {
 			items = append(items, e.car)
 			expr = e.cdr
 		default:
+			return nil, false
+		}
+		if step%2 == 1 {
+			slow = slow.(*Cons).cdr
+		}
+		if expr == slow {
 			return nil, false
 		}
 	}

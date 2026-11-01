@@ -2,6 +2,7 @@ package types_test
 
 import (
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -320,4 +321,97 @@ func TestFormatBase(t *testing.T) {
 	for _, base := range []int{-1, 0, 1, 37} {
 		assert.Panics(t, func() { types.FormatBase(num(1), nil, base) }, "base %d", base)
 	}
+}
+
+func TestFormatLabels(t *testing.T) {
+	ps := types.NewPackages()
+	sym := func(name string) types.Expression {
+		s, _ := ps.User().Intern(name)
+		return s
+	}
+	num := func(n int64) types.Expression { return types.NewNumberInteger(big.NewInt(n)) }
+	list := func(items ...types.Expression) *types.Cons { return types.NewList(items).(*types.Cons) }
+	format := func(e types.Expression) string { return types.Format(e, ps.User()) }
+	// selfRef builds an expression that contains itself: build is given a
+	// placeholder to put where it should be
+	selfRef := func(build func(ph types.Expression) types.Expression) types.Expression {
+		ph := types.NewPlaceholder(1)
+		e := build(ph)
+		types.Substitute(e, ph, e)
+		return e
+	}
+
+	// Cycles through the cdr, the car, and both
+	cdrCycle := selfRef(func(ph types.Expression) types.Expression { return types.NewCons(sym("A"), ph) })
+	assert.Equal(t, "#1=(A . #1#)", format(cdrCycle))
+	assert.Equal(t, "#1=(#1# A)", format(selfRef(func(ph types.Expression) types.Expression {
+		return types.NewCons(ph, list(sym("A")))
+	})))
+	assert.Equal(t, "#1=(#1#)", format(selfRef(func(ph types.Expression) types.Expression {
+		return types.NewCons(ph, types.Nil)
+	})))
+	assert.Equal(t, "#1=(#1# . #1#)", format(selfRef(func(ph types.Expression) types.Expression {
+		return types.NewCons(ph, ph)
+	})))
+	// A cycle back to a cell after the first one
+	second := selfRef(func(ph types.Expression) types.Expression {
+		return types.NewCons(sym("B"), types.NewCons(sym("C"), ph))
+	})
+	assert.Equal(t, "(A . #1=(B C . #1#))", format(types.NewCons(sym("A"), second)))
+
+	// Sharing without a cycle is labeled too, so it is the same when read back
+	shared := list(sym("X"))
+	assert.Equal(t, "(#1=(X) #1#)", format(list(shared, shared)))
+	assert.Equal(t, "(#1=(X) #1# #1#)", format(list(shared, shared, shared)))
+	assert.Equal(t, "(A X)", format(types.NewCons(sym("A"), shared)))
+	assert.Equal(t, "((A . #1=(X)) (B . #1#))",
+		format(list(types.NewCons(sym("A"), shared), types.NewCons(sym("B"), shared))))
+	// Equal but separate lists are not shared
+	assert.Equal(t, "((X) (X))", format(list(list(sym("X")), list(sym("X")))))
+	// Symbols and numbers are never labeled
+	assert.Equal(t, "(A A 1 1)", format(list(sym("A"), sym("A"), num(1), num(1))))
+
+	// Labels are numbered in the order they are written
+	other := list(sym("Y"))
+	assert.Equal(t, "(#1=(X) #2=(Y) #2# #1#)", format(list(shared, other, other, shared)))
+	// A cell that is only in a cycle is the only one labeled
+	inner := list(sym("A"))
+	outer := selfRef(func(ph types.Expression) types.Expression {
+		return list(sym("B"), inner, ph)
+	})
+	assert.Equal(t, "#1=(B (A) #1#)", format(outer))
+
+	// Vectors
+	vec := selfRef(func(ph types.Expression) types.Expression {
+		return types.NewVector([]types.Expression{sym("A"), ph})
+	})
+	assert.Equal(t, "#1=#(A #1#)", format(vec))
+	assert.Equal(t, "#1=#(A #1#)", types.Format(vec, ps.User()))
+	sharedVec := types.NewVector([]types.Expression{sym("A")})
+	assert.Equal(t, "(#1=#(A) #1#)", format(list(sharedVec, sharedVec)))
+	// A cycle through a list and a vector
+	assert.Equal(t, "#1=(#(#1#))", format(selfRef(func(ph types.Expression) types.Expression {
+		return list(types.NewVector([]types.Expression{ph}))
+	})))
+
+	// A prefix form with a label
+	quoteSym, _ := ps.CommonLisp().Find(types.NameQuote)
+	quoted := list(quoteSym, sym("A"))
+	assert.Equal(t, "(#1='A #1#)", format(list(quoted, quoted)))
+	// The cell of the item is part of the form, so if that is shared it is a list
+	item := list(sym("A"))
+	assert.Equal(t, "((QUOTE . #1=(A)) #1#)", format(list(types.NewCons(quoteSym, item), item)))
+
+	// The text of a cycle with no package is still finite
+	assert.Equal(t, "#1=(COMMON-LISP-USER::A . #1#)", cdrCycle.String())
+	assert.Equal(t, "#1=#(COMMON-LISP-USER::A #1#)", vec.String())
+
+	// Sharing at every level doesn't make the text grow without bound
+	doubled := types.Expression(list(sym("X")))
+	for k := 0; k < 60; k++ {
+		doubled = list(doubled, doubled)
+	}
+	text := format(doubled)
+	assert.Less(t, len(text), 2000)
+	assert.True(t, strings.HasPrefix(text, "(#1=(#2=("), text)
 }

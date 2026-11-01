@@ -1,6 +1,7 @@
 package types
 
 import (
+	"fmt"
 	"strings"
 	"unicode"
 )
@@ -10,6 +11,11 @@ import (
 // qualified with its package, so that reading the text in current gives back the
 // same symbol. If current is nil, nothing is accessible and every interned
 // symbol is qualified.
+//
+// A cons or vector that is reached more than once, which includes every one in
+// a cycle, is written with a label the first time, as in #1=(a b), and as a
+// reference to it after that, as in #1#. So printing always ends, and the shared
+// structure is kept when the text is read back.
 //
 // The text of an expression the reader can produce can be read back by a reader
 // with the standard readtable and the default case mode, Upcase. The one symbol
@@ -31,30 +37,103 @@ func FormatBase(e Expression, current *Package, base int) string {
 		panic("types: FormatBase called with a base outside 2 to 36")
 	}
 	var sb strings.Builder
-	writeExpr(&sb, e, current, 0, base)
+	p := &printer{
+		sb:      &sb,
+		current: current,
+		base:    base,
+		shared:  findShared(e),
+		labels:  map[Expression]int{},
+	}
+	p.write(e, 0)
 	return sb.String()
 }
 
-// writeExpr writes e, which is inside depth levels of backquote, for a reader
-// with the read base base.
-func writeExpr(sb *strings.Builder, e Expression, current *Package, depth, base int) {
+// findShared returns the conses and vectors that can be reached more than once
+// from e, or nil if there are none.
+func findShared(e Expression) map[Expression]bool {
+	var shared map[Expression]bool
+	seen := map[Expression]bool{}
+	stack := []Expression{e}
+	for len(stack) > 0 {
+		x := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		var children []Expression
+		switch v := x.(type) {
+		case *Cons:
+			if v == nil {
+				continue
+			}
+			children = []Expression{v.car, v.cdr}
+		case *Vector:
+			children = v.items
+		default:
+			continue
+		}
+		if seen[x] {
+			if shared == nil {
+				shared = map[Expression]bool{}
+			}
+			shared[x] = true
+			continue
+		}
+		seen[x] = true
+		stack = append(stack, children...)
+	}
+	return shared
+}
+
+// printer writes an expression for a reader with the read base base.
+type printer struct {
+	sb      *strings.Builder
+	current *Package
+	base    int
+	// shared are the conses and vectors to write with labels, and labels is the
+	// number given to each one that has been written
+	shared map[Expression]bool
+	labels map[Expression]int
+}
+
+// writeLabel writes the label of x if it is shared. It returns true if that was
+// a reference to a label already written, so x itself is not to be written.
+func (p *printer) writeLabel(x Expression) bool {
+	if !p.shared[x] {
+		return false
+	}
+	if n, ok := p.labels[x]; ok {
+		fmt.Fprintf(p.sb, "#%d#", n)
+		return true
+	}
+	n := len(p.labels) + 1
+	p.labels[x] = n
+	fmt.Fprintf(p.sb, "#%d=", n)
+	return false
+}
+
+// write writes e, which is inside depth levels of backquote.
+func (p *printer) write(e Expression, depth int) {
+	sb := p.sb
 	switch v := e.(type) {
 	case *Symbol:
-		writeSymbol(sb, v, current, base)
+		writeSymbol(sb, v, p.current, p.base)
 	case *Cons:
 		if v == nil {
 			sb.WriteString("<nil>")
 			return
 		}
-		if form, item, ok := prefixFormOf(v, depth); ok {
+		if p.writeLabel(v) {
+			return
+		}
+		if form, item, ok := prefixFormOf(v, depth, p.shared); ok {
 			sb.WriteString(form.prefix)
 			if form.prefix != "," {
-				writeExpr(sb, item, current, depth+form.delta, base)
+				p.write(item, depth+form.delta)
 				return
 			}
 			// ,@ and ,. are the splicing forms when they follow a comma
 			var inner strings.Builder
-			writeExpr(&inner, item, current, depth+form.delta, base)
+			p.sb = &inner
+			p.write(item, depth+form.delta)
+			p.sb = sb
 			text := inner.String()
 			if strings.HasPrefix(text, "@") || strings.HasPrefix(text, ".") {
 				sb.WriteString(" ")
@@ -63,36 +142,41 @@ func writeExpr(sb *strings.Builder, e Expression, current *Package, depth, base 
 			return
 		}
 		sb.WriteString("(")
-		writeExpr(sb, v.car, current, depth, base)
+		p.write(v.car, depth)
 		rest := v.cdr
 		for {
 			next, ok := rest.(*Cons)
-			if !ok {
+			// A cell that is shared is written after a dot, so that it can have
+			// its label
+			if !ok || next == nil || p.shared[next] {
 				break
 			}
 			sb.WriteString(" ")
-			writeExpr(sb, next.car, current, depth, base)
+			p.write(next.car, depth)
 			rest = next.cdr
 		}
 		if rest != Nil {
 			sb.WriteString(" . ")
-			writeExpr(sb, rest, current, depth, base)
+			p.write(rest, depth)
 		}
 		sb.WriteString(")")
 	case *Vector:
+		if p.writeLabel(v) {
+			return
+		}
 		sb.WriteString("#(")
 		for i, item := range v.items {
 			if i > 0 {
 				sb.WriteString(" ")
 			}
-			writeExpr(sb, item, current, depth, base)
+			p.write(item, depth)
 		}
 		sb.WriteString(")")
 	case *Number:
 		switch {
-		case base != 10 && v.typ == NumberTypeInteger:
+		case p.base != 10 && v.typ == NumberTypeInteger:
 			sb.WriteString(v.String() + ".")
-		case base != 10 && v.typ == NumberTypeRatio:
+		case p.base != 10 && v.typ == NumberTypeRatio:
 			sb.WriteString("#10r" + v.String())
 		default:
 			sb.WriteString(v.String())
@@ -121,11 +205,13 @@ var prefixForms = []prefixForm{
 // prefixFormOf reports whether c is one of prefixForms, and returns it and the
 // item. A symbol with one of those names in another package doesn't count, and
 // neither does a comma form outside of a backquote, as the reader would reject
-// it. depth is the number of backquotes that c is inside.
-func prefixFormOf(c *Cons, depth int) (prefixForm, Expression, bool) {
+// it. depth is the number of backquotes that c is inside. The cell of the item
+// is part of the form, so it can't be one of the shared cells, which need to be
+// written as lists to have their labels.
+func prefixFormOf(c *Cons, depth int, shared map[Expression]bool) (prefixForm, Expression, bool) {
 	sym, isSym := c.car.(*Symbol)
 	rest, isCons := c.cdr.(*Cons)
-	if !isSym || !isCons || rest.cdr != Nil || sym.pkg == nil {
+	if !isSym || !isCons || rest.cdr != Nil || sym.pkg == nil || shared[rest] {
 		return prefixForm{}, nil, false
 	}
 	for _, form := range prefixForms {
