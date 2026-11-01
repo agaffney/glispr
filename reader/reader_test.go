@@ -1,6 +1,7 @@
 package reader_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
@@ -622,9 +623,9 @@ func TestReaderVectorErrors(t *testing.T) {
 		{`#999999999999999999999999999999(a)`, "invalid vector length"},
 		// An argument must be followed by r, (, = or #
 		{`#3`, "end of file after dispatch argument"},
-		{`#3a`, "expected 'r', '(', '=' or '#'"},
-		{`#3 (a)`, "expected 'r', '(', '=' or '#'"},
-		{`#3)`, "expected 'r', '(', '=' or '#'"},
+		{`#3a`, "expected 'r', '(', '*', '=' or '#'"},
+		{`#3 (a)`, "expected 'r', '(', '*', '=' or '#'"},
+		{`#3)`, "expected 'r', '(', '*', '=' or '#'"},
 		// A reference to a label that is not there, and then a list
 		{`#3#(a)`, "label #3# is not defined"},
 		// The length is not a radix
@@ -1354,7 +1355,7 @@ func TestReaderDispatchRadix(t *testing.T) {
 	}
 
 	t.Run("unknown dispatch macro errors", func(t *testing.T) {
-		inputs := []string{"#p", "#q", "#?", "#!", "#&", "#*", "#+", "#-"}
+		inputs := []string{"#p", "#q", "#?", "#!", "#&", "#+", "#-"}
 		for _, input := range inputs {
 			i, err := reader.NewInput(strings.NewReader(input))
 			assert.NoError(t, err)
@@ -2883,7 +2884,7 @@ func TestReaderLabelErrors(t *testing.T) {
 		{"#=a", "unknown dispatch macro"},
 		{"##", "unknown dispatch macro"},
 		{"#1", "end of file"},
-		{"#1a", "invalid dispatch argument: expected 'r', '(', '=' or '#'"},
+		{"#1a", "invalid dispatch argument: expected 'r', '(', '*', '=' or '#'"},
 		{"#1 a", "invalid dispatch argument"},
 	}
 	for _, tc := range testDefs {
@@ -3046,4 +3047,157 @@ func TestReaderLabelsDeep(t *testing.T) {
 		depth++
 	}
 	assert.Equal(t, 2000, depth)
+}
+
+func TestReaderBitVector(t *testing.T) {
+	bits := func(b ...byte) types.Expression { return types.NewBitVector(b) }
+	list := func(items ...types.Expression) types.Expression { return types.NewList(items) }
+
+	testDefs := []struct {
+		input string
+		want  types.Expression
+	}{
+		{"#*", bits()},
+		{"#*0", bits(0)},
+		{"#*1", bits(1)},
+		{"#*1011", bits(1, 0, 1, 1)},
+		{"#*0000", bits(0, 0, 0, 0)},
+		{"#*01" + strings.Repeat("1", 100), types.NewBitVector(append([]byte{0}, bytes.Repeat([]byte{1}, 101)...))},
+		// The token ends where any other does
+		{"#*101 a", bits(1, 0, 1)},
+		{"#* 101", bits()},
+		{"#*\n101", bits()},
+		{"#*101\n", bits(1, 0, 1)},
+		{"#*101;c", bits(1, 0, 1)},
+		{`#*101"s"`, bits(1, 0, 1)},
+		{"#*101'a", bits(1, 0, 1)},
+		{"#*101`a", bits(1, 0, 1)},
+		{"#*101(", bits(1, 0, 1)},
+		// Nothing after the dispatch characters is an empty vector
+		{"#*)", bits()},
+		{"#*(", bits()},
+		{`#*"s"`, bits()},
+		{"#*;c", bits()},
+		{"#*'a", bits()},
+		// With a length, the last bit is repeated to fill it out
+		{"#5*101", bits(1, 0, 1, 1, 1)},
+		{"#3*1", bits(1, 1, 1)},
+		{"#3*0", bits(0, 0, 0)},
+		{"#3*101", bits(1, 0, 1)},
+		{"#0*", bits()},
+		{"#007*1", bits(1, 1, 1, 1, 1, 1, 1)},
+		{"#1048576*1", types.NewBitVector(bytes.Repeat([]byte{1}, 1048576))},
+		// In other forms
+		{"(#*10 #*01)", list(bits(1, 0), bits(0, 1))},
+		{"(#*10)", list(bits(1, 0))},
+		{"(a . #*10)", types.NewListTail([]types.Expression{testSym("A")}, bits(1, 0))},
+		{"#(#*1 #*)", types.NewVector([]types.Expression{bits(1), bits()})},
+		{"'#*10", testQuote(bits(1, 0))},
+		{"(#*10 #*10)", list(bits(1, 0), bits(1, 0))},
+		{"(#1=#*10 #1#)", list(bits(1, 0), bits(1, 0))},
+		{"#+common-lisp #*10", bits(1, 0)},
+		{"#+never #*10 #*01", bits(0, 1)},
+		{"#x1F", types.NewNumberInteger(big.NewInt(31))},
+	}
+	for _, tc := range testDefs {
+		r := newTestReader()
+		got, err := r.Read(mustInput(t, tc.input))
+		if !assert.NoError(t, err, "input %q", tc.input) {
+			continue
+		}
+		assert.Equal(t, tc.want, got, "input %q", tc.input)
+	}
+
+	// The rest of the input is left for the next read
+	r := newTestReader()
+	got, err := readAll(t, r, "#*101 #*0 a #3*1 b")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"#*101", "#*0", "A", "#*111", "B"}, got)
+}
+
+func TestReaderBitVectorErrors(t *testing.T) {
+	testDefs := []struct {
+		input   string
+		wantErr string
+	}{
+		{"#*2", "invalid character '2' in bit vector"},
+		{"#*102", "invalid character '2' in bit vector"},
+		{"#*a", "invalid character 'a' in bit vector"},
+		{"#*1a0", "invalid character 'a' in bit vector"},
+		{"#*1.0", "invalid character '.' in bit vector"},
+		{"#*-1", "invalid character '-' in bit vector"},
+		{"#*+1", "invalid character '+' in bit vector"},
+		{"#*1/1", "invalid character '/' in bit vector"},
+		{"#*10:", "invalid character ':' in bit vector"},
+		{"#*٠", "invalid character"},
+		{"#*1#", "invalid character '#' in bit vector"},
+		{"#*#1", "invalid character '#' in bit vector"},
+		{"#*#", "invalid character '#' in bit vector"},
+		{"#*1#*0", "invalid character '#' in bit vector"},
+		// Escapes make the characters something else
+		{`#*\1`, "escape in bit vector"},
+		{`#*1\0`, "escape in bit vector"},
+		{"#*|1|", "escape in bit vector"},
+		{"#*1|0|", "escape in bit vector"},
+		{"#*||", "escape in bit vector"},
+		{"#*||1", "escape in bit vector"},
+		{"#*|1", "end of file in multiple escape"},
+		{`#*1\`, "end of file after single escape"},
+		// Lengths
+		{"#3*", "no bits to fill it with"},
+		{"#1*", "no bits to fill it with"},
+		{"#0*1", "too many bits (1)"},
+		{"#2*101", "too many bits (3)"},
+		{"#3*1012", "invalid character '2' in bit vector"},
+		{"#1048577*1", "invalid bit vector length"},
+		{"#99999999999999999999*1", "invalid bit vector length"},
+		{"#999999999999999999999999999999*", "invalid bit vector length"},
+		{"#3 *1", "invalid dispatch argument"},
+		{"#3*" + "\x01", "invalid character"},
+		{"#*1\x01", "invalid character"},
+	}
+	for _, tc := range testDefs {
+		r := newTestReader()
+		got, err := r.Read(mustInput(t, tc.input))
+		var readerErr reader.ReaderError
+		assert.True(t, errors.As(err, &readerErr), "input %q: %v", tc.input, err)
+		assert.ErrorContains(t, err, tc.wantErr, "input %q", tc.input)
+		assert.Nil(t, got, "input %q", tc.input)
+	}
+}
+
+func TestReaderBitVectorSkipped(t *testing.T) {
+	// A skipped bit vector is not checked, only read
+	r := newTestReader()
+	for _, text := range []string{
+		"#*102", "#*a", "#*1.0", "#*#", `#*\1`, "#*|1|", "#*||",
+		"#3*", "#0*1", "#2*101", "#1048577*1", "#99999999999999999999*1",
+		"(#*2 #3* #*x)",
+	} {
+		got, err := readAll(t, r, "#+never "+text+" ok")
+		assert.NoError(t, err, "form %q", text)
+		assert.Equal(t, []string{"OK"}, got, "form %q", text)
+	}
+
+	// The syntax still has to be there
+	_, err := readAll(t, r, "#+never #*|1")
+	assert.ErrorContains(t, err, "end of file in multiple escape")
+
+	// And when it isn't skipped they are errors
+	for _, text := range []string{"#*102", "#3*", "#0*1"} {
+		_, err := readAll(t, r, "#-never "+text+" ok")
+		assert.Error(t, err, "form %q", text)
+	}
+}
+
+func TestReaderBitVectorRoundTrip(t *testing.T) {
+	for _, input := range []string{"#*", "#*0", "#*1", "#*0110", "#8*1", "#5*10"} {
+		r := newTestReader()
+		first, err := r.Read(mustInput(t, input))
+		assert.NoError(t, err, "input %q", input)
+		text := types.Format(first, r.Package)
+		second, err := r.Read(mustInput(t, text))
+		assert.NoError(t, err, "text %q", text)
+		assert.Equal(t, first, second, "input %q, text %q", input, text)
+	}
 }
