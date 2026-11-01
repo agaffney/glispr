@@ -2322,3 +2322,232 @@ func TestReaderBackquotePackages(t *testing.T) {
 	_, err = r.Read(mustInput(t, "`1"))
 	assert.ErrorContains(t, err, "no package set")
 }
+
+// readAll reads every expression in text and returns them printed, or the error
+// that stopped it.
+func readAll(t *testing.T, r *reader.Reader, text string) ([]string, error) {
+	t.Helper()
+	i := mustInput(t, text)
+	var out []string
+	for {
+		expr, err := r.Read(i)
+		if err != nil {
+			return out, err
+		}
+		if expr == nil {
+			return out, nil
+		}
+		out = append(out, types.Format(expr, r.Package))
+	}
+}
+
+func TestReaderFeatures(t *testing.T) {
+	r := newTestReader()
+	r.Features = []string{"FOO", "BAR", "NIL"}
+
+	valid := []struct {
+		input string
+		want  []string
+	}{
+		{"#+foo a", []string{"A"}},
+		{"#+baz a", nil},
+		{"#-foo a", nil},
+		{"#-baz a", []string{"A"}},
+		// Case is converted like any other symbol
+		{"#+FOO a", []string{"A"}},
+		{"#+|foo| a", nil},
+		{"#+:foo a", []string{"A"}},
+		// The form after is the one that is skipped, not the rest
+		{"#+baz a b", []string{"B"}},
+		{"#-baz a b", []string{"A", "B"}},
+		{"a #+baz b c", []string{"A", "C"}},
+		// Feature expressions
+		{"#+(and foo bar) a", []string{"A"}},
+		{"#+(and foo baz) a", nil},
+		{"#+(and) a", []string{"A"}},
+		{"#+(or baz foo) a", []string{"A"}},
+		{"#+(or baz qux) a", nil},
+		{"#+(or) a", nil},
+		{"#+(not baz) a", []string{"A"}},
+		{"#+(not foo) a", nil},
+		{"#-(not foo) a", []string{"A"}},
+		{"#+(and foo (or baz bar) (not qux)) a", []string{"A"}},
+		{"#+(AND foo bar) a", []string{"A"}},
+		// An operator name is a feature when it is not at the start of a list
+		{"#+and a", nil},
+		// NIL is the keyword here, so it is a feature only if listed
+		{"#+nil a", []string{"A"}},
+		// Space, comments and skipped forms before the feature or the form
+		{"#+ foo a", []string{"A"}},
+		{"#+foo ; c\n a", []string{"A"}},
+		{"#+foo #| c |# a", []string{"A"}},
+		{"#+foo #+bar a", []string{"A"}},
+		{"#+foo #+baz a b", []string{"B"}},
+		// A conditional that skips its form produces nothing, so the read for the
+		// form to skip goes on to the next one
+		{"#+baz #+foo a b", nil},
+		{"#+baz #-foo a b c", []string{"C"}},
+		// Inside lists, vectors and quotes
+		{"(a #+foo b c)", []string{"(A B C)"}},
+		{"(a #+baz b c)", []string{"(A C)"}},
+		{"(a #+baz b)", []string{"(A)"}},
+		{"#(a #+baz b c)", []string{"#(A C)"}},
+		{"'#+baz a b", []string{"'B"}},
+		{"(a . #+baz b c)", []string{"(A . C)"}},
+		{"#+foo (a b)", []string{"(A B)"}},
+		// Skipped forms of any shape
+		{"#+baz (a (b c) #(d) \"s\" 'e `(f ,g))", nil},
+		{"#+baz \"unterminated paren (\"", nil},
+		{"#+baz #\\a b", []string{"B"}},
+	}
+	for _, tc := range valid {
+		got, err := readAll(t, r, tc.input)
+		assert.NoError(t, err, "input %q", tc.input)
+		assert.Equal(t, tc.want, got, "input %q", tc.input)
+	}
+
+	invalid := []struct {
+		input string
+		msg   string
+	}{
+		{"#+", "end of file"},
+		{"#-", "end of file"},
+		{"#+foo", "end of file"},
+		{"#+baz", "end of file"},
+		{"(#+foo)", "unmatched close parenthesis"},
+		{"#+()", "invalid feature expression"},
+		{"#+(foo)", "invalid feature expression"},
+		{"#+(foo bar)", "invalid feature expression"},
+		{"#+(not)", "NOT takes one argument"},
+		{"#+(not foo bar)", "NOT takes one argument"},
+		{"#+(and . foo)", "invalid feature expression"},
+		{"#+(and foo . bar)", "invalid feature expression"},
+		{"#+1 a", "invalid feature expression"},
+		{"#+\"foo\" a", "invalid feature expression"},
+		{"#+#(foo) a", "invalid feature expression"},
+		{"#+(#:and foo) a", "invalid feature expression"},
+		{"#+(and #:foo) a", "invalid feature expression"},
+		// A malformed operand is found even if an earlier one decides the result
+		{"#+(or foo (not)) a", "NOT takes one argument"},
+		{"#+(and baz (not)) a", "NOT takes one argument"},
+		// The feature expression of a conditional in a skipped form is still read
+		{"#+baz #+nosuchpkg:foo a", "package"},
+		// A skipped form still has to have balanced syntax
+		{"#+baz (a", "end of file"},
+		{"#+baz )", "unmatched close parenthesis"},
+		{"#+baz (a . )", "dot context error"},
+		{"#+baz #<", "unknown dispatch macro"},
+		{"#+baz \"abc", "end of file"},
+		// Skipping doesn't reach past the end of the list
+		{"(#+baz)", "unmatched close parenthesis"},
+	}
+	for _, tc := range invalid {
+		_, err := readAll(t, r, tc.input)
+		assert.ErrorContains(t, err, tc.msg, "input %q", tc.input)
+	}
+}
+
+func TestReaderFeaturesSkipped(t *testing.T) {
+	// Tokens in a skipped form aren't interpreted: they aren't errors, and they
+	// don't intern symbols or make uninterned ones
+	ps := types.NewPackages()
+	r := reader.NewReader(ps)
+	skipped := []string{
+		"nosuchpkg:foo",
+		"nosuchpkg::foo",
+		"cl:nosuchsymbol",
+		"a:b:c",
+		":",
+		"1/0",
+		"...",
+		"#\\NoSuchCharacterName",
+		"#:a:b",
+		"#37rzz",
+		"#1r0",
+		"#xzz",
+		"#b2",
+		"#2(a b c)",
+		"#0(a)",
+		"#2()",
+		"(a . b)",
+		"(nosuchpkg:foo . #:bar)",
+		"'(nosuchpkg:a)",
+		"`(,nosuchpkg:a)",
+	}
+	for _, text := range skipped {
+		got, err := readAll(t, r, "#+never "+text+" ok")
+		assert.NoError(t, err, "form %q", text)
+		assert.Equal(t, []string{"OK"}, got, "form %q", text)
+	}
+	assert.Nil(t, ps.Find("NOSUCHPKG"))
+	// OK is the only symbol that was read
+	for _, name := range []string{"A", "B", "C", "D", "E", "F", "G", "NOSUCHSYMBOL"} {
+		_, status := ps.User().Find(name)
+		assert.Equal(t, types.SymbolStatusNone, status, "symbol %s", name)
+	}
+	_, status := ps.User().Find("OK")
+	assert.Equal(t, types.SymbolStatusInternal, status)
+
+	// The same forms are errors when they are not skipped
+	for _, text := range []string{"nosuchpkg:foo", "cl:nosuchsymbol", "#\\NoSuchCharacterName", "#37rzz", "1/0", "..."} {
+		_, err := readAll(t, r, "#-never "+text+" ok")
+		assert.Error(t, err, "form %q", text)
+	}
+}
+
+func TestReaderFeaturesState(t *testing.T) {
+	// The package and the skipping mode are back as they were, after success and
+	// after errors
+	ps := types.NewPackages()
+	other, err := ps.Make("OTHER", nil, nil)
+	assert.NoError(t, err)
+	r := reader.NewReader(ps)
+	r.Package = other
+	r.Features = []string{"FOO"}
+
+	for _, text := range []string{"#+foo a", "#+baz a", "#+(not", "#+(foo) a", "#+baz (a", "#+foo ("} {
+		_, _ = readAll(t, r, text)
+		assert.Same(t, other, r.Package, "after %q", text)
+		// Tokens are read as numbers and symbols again
+		got, err := readAll(t, r, "1 x")
+		assert.NoError(t, err, "after %q", text)
+		assert.Equal(t, []string{"1", "X"}, got, "after %q", text)
+	}
+
+	// The feature is read in KEYWORD, the form in the current package
+	got, err := readAll(t, r, "#+foo x")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"X"}, got)
+	sym, status := other.Find("X")
+	assert.NotNil(t, sym)
+	assert.Equal(t, types.SymbolStatusInternal, status)
+	_, status = other.Find("FOO")
+	assert.Equal(t, types.SymbolStatusNone, status)
+	_, status = ps.Keyword().Find("FOO")
+	assert.Equal(t, types.SymbolStatusExternal, status)
+
+	// A skipped form doesn't depend on the current package being valid
+	r.Package = nil
+	_, err = readAll(t, r, "#+baz x")
+	assert.NoError(t, err)
+	_, err = readAll(t, r, "#+foo x")
+	assert.ErrorContains(t, err, "current package is not in the package set")
+
+	// No package set means no keyword package to read the feature in
+	r = reader.NewReader(ps)
+	r.Packages = nil
+	_, err = r.Read(mustInput(t, "#+foo x"))
+	assert.ErrorContains(t, err, "no package set")
+}
+
+func TestReaderFeaturesDefault(t *testing.T) {
+	r := newTestReader()
+	got, err := readAll(t, r, "#+common-lisp a #+glispr b #+nosuchfeature c")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"A", "B"}, got)
+
+	// Each reader has its own list
+	r.Features = append(r.Features, "EXTRA")
+	other := newTestReader()
+	assert.NotContains(t, other.Features, "EXTRA")
+}
