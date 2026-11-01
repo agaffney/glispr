@@ -596,6 +596,8 @@ func readDispatch(r *Reader, i *Input, initialChar rune) (types.Expression, erro
 		return readFeatureConditional(r, i, true)
 	case '-':
 		return readFeatureConditional(r, i, false)
+	case 'c', 'C':
+		return readComplex(r, i)
 	case 'b', 'B':
 		return readDispatchRadixNumber(r, i, 2)
 	case 'o', 'O':
@@ -808,6 +810,32 @@ func readDispatchArgument(r *Reader, i *Input, firstDigit rune) (types.Expressio
 		}
 		return nil, newReaderError(i, "invalid dispatch argument: expected 'r', '(', '*', '=' or '#'")
 	}
+}
+
+// readComplex reads the list of the real and imaginary parts after #c.
+func readComplex(r *Reader, i *Input) (types.Expression, error) {
+	expr, err := r.readRequired(i)
+	if err != nil {
+		return nil, err
+	}
+	if r.suppress {
+		return types.Nil, nil
+	}
+	var parts []*types.Number
+	items, ok := types.ListItems(expr)
+	for _, item := range items {
+		if num, isNum := item.(*types.Number); isNum && num.NumType() != types.NumberTypeComplex {
+			parts = append(parts, num)
+		}
+	}
+	if !ok || len(items) != 2 || len(parts) != 2 {
+		return nil, newReaderError(i, "invalid complex number: #c must be followed by a list of two real numbers")
+	}
+	num, err := types.NewNumberComplex(parts[0], parts[1])
+	if err != nil {
+		return nil, newReaderError(i, "%v in complex number", err)
+	}
+	return num, nil
 }
 
 // readBitVector reads the bits after #* or #n*, which are the characters 0 and 1

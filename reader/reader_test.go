@@ -3201,3 +3201,176 @@ func TestReaderBitVectorRoundTrip(t *testing.T) {
 		assert.Equal(t, first, second, "input %q, text %q", input, text)
 	}
 }
+
+func TestReaderComplex(t *testing.T) {
+	cplx := func(re, im *types.Number) types.Expression {
+		c, err := types.NewNumberComplex(re, im)
+		assert.NoError(t, err)
+		return c
+	}
+	intN := func(n int64) *types.Number { return types.NewNumberInteger(big.NewInt(n)) }
+	ratN := func(a, b int64) *types.Number { return types.NewNumberRatio(big.NewRat(a, b)) }
+
+	testDefs := []struct {
+		input string
+		want  types.Expression
+	}{
+		{"#c(1 2)", cplx(intN(1), intN(2))},
+		{"#C(1 2)", cplx(intN(1), intN(2))},
+		{"#c(-3 +4)", cplx(intN(-3), intN(4))},
+		{"#c(0 1)", cplx(intN(0), intN(1))},
+		{"#c(1/2 -3/4)", cplx(ratN(1, 2), ratN(-3, 4))},
+		{"#c(1 1/2)", cplx(intN(1), ratN(1, 2))},
+		// A rational zero imaginary part leaves a real number
+		{"#c(5 0)", intN(5)},
+		{"#c(1/2 0)", ratN(1, 2)},
+		{"#c(0 0)", intN(0)},
+		{"#c(5 4/2)", cplx(intN(5), intN(2))},
+		{"#c(5 0/3)", intN(5)},
+		// Floats, which make both parts floats
+		{"#c(1.5 2.5)", cplx(singleFloat(1.5), singleFloat(2.5))},
+		{"#c(1.5d0 2.5d0)", cplx(doubleFloat(1.5), doubleFloat(2.5))},
+		{"#c(1.5 2)", cplx(singleFloat(1.5), singleFloat(2))},
+		{"#c(1 2.5)", cplx(singleFloat(1), singleFloat(2.5))},
+		{"#c(1/4 2.0d0)", cplx(doubleFloat(0.25), doubleFloat(2))},
+		{"#c(1.5f0 2.5d0)", cplx(doubleFloat(1.5), doubleFloat(2.5))},
+		{"#c(1e2 3)", cplx(singleFloat(100), singleFloat(3))},
+		{"#c(5.0 0.0)", cplx(singleFloat(5), singleFloat(0))},
+		{"#c(5 0.0)", cplx(singleFloat(5), singleFloat(0))},
+		// Numbers in other bases and forms
+		{"#c(#x10 #b11)", cplx(intN(16), intN(3))},
+		{"#c(10. 11.)", cplx(intN(10), intN(11))},
+		{"#c(#16r-A #o17)", cplx(intN(-10), intN(15))},
+		// Space and comments before the list and in it
+		{"#c (1 2)", cplx(intN(1), intN(2))},
+		{"#c\n(1 2)", cplx(intN(1), intN(2))},
+		{"#c ;c\n (1 2)", cplx(intN(1), intN(2))},
+		{"#c #|c|# (1 2)", cplx(intN(1), intN(2))},
+		{"#c( 1  ;c\n 2 )", cplx(intN(1), intN(2))},
+		// Where the numbers come from
+		{"#c(#1=1 #1#)", cplx(intN(1), intN(1))},
+		{"#c(#+never a 1 2)", cplx(intN(1), intN(2))},
+		{"#+never #c(a b) #c(1 2)", cplx(intN(1), intN(2))},
+		// In other forms
+		{"(#c(1 2) a)", types.NewList([]types.Expression{cplx(intN(1), intN(2)), testSym("A")})},
+		{"#(#c(1 2))", types.NewVector([]types.Expression{cplx(intN(1), intN(2))})},
+		{"'#c(1 2)", testQuote(cplx(intN(1), intN(2)))},
+		{"(a . #c(1 2))", types.NewListTail([]types.Expression{testSym("A")}, cplx(intN(1), intN(2)))},
+	}
+	for _, tc := range testDefs {
+		r := newTestReader()
+		got, err := r.Read(mustInput(t, tc.input))
+		if !assert.NoError(t, err, "input %q", tc.input) {
+			continue
+		}
+		assert.Equal(t, tc.want, got, "input %q", tc.input)
+	}
+
+	// The tokens in the list are read like any other
+	r := newTestReader()
+	r.DefaultFloatFormat = types.FloatFormatDouble
+	got, err := r.Read(mustInput(t, "#c(1.5 2)"))
+	assert.NoError(t, err)
+	assert.Equal(t, cplx(doubleFloat(1.5), doubleFloat(2)), got)
+
+	r = newTestReader()
+	r.ReadBase = 16
+	got, err = r.Read(mustInput(t, "#c(a b)"))
+	assert.NoError(t, err)
+	assert.Equal(t, cplx(intN(10), intN(11)), got)
+}
+
+func TestReaderComplexErrors(t *testing.T) {
+	testDefs := []struct {
+		input   string
+		wantErr string
+	}{
+		{"#c", "end of file"},
+		{"#c ", "end of file"},
+		{"#c)", "unmatched close parenthesis"},
+		{"#c(1 2", "end of file"},
+		{"#c()", "invalid complex number"},
+		{"#c(1)", "invalid complex number"},
+		{"#c(1 2 3)", "invalid complex number"},
+		{"#c(1 . 2)", "invalid complex number"},
+		{"#c(1 2 . 3)", "invalid complex number"},
+		{"#c 5", "invalid complex number"},
+		{"#c a", "invalid complex number"},
+		{"#c\"12\"", "invalid complex number"},
+		{"#c#(1 2)", "invalid complex number"},
+		{"#c'(1 2)", "invalid complex number"},
+		{"#c(a b)", "invalid complex number"},
+		{"#c(1 a)", "invalid complex number"},
+		{"#c(a 1)", "invalid complex number"},
+		{`#c("1" 2)`, "invalid complex number"},
+		{`#c(#\1 2)`, "invalid complex number"},
+		{"#c((1) 2)", "invalid complex number"},
+		{"#c(() 2)", "invalid complex number"},
+		// The parts are real
+		{"#c(#c(1 2) 3)", "invalid complex number"},
+		{"#c(1 #c(1 2))", "invalid complex number"},
+		{"#c(#c(1.5 2) #c(1.5 2))", "invalid complex number"},
+		// A circular list is not a list of two
+		{"#c#1=(1 . #1#)", "invalid complex number"},
+		{"#c#1=(1 2 . #1#)", "invalid complex number"},
+		// A part that is not a number when it is read
+		{"#c(1/0 2)", "division by zero"},
+		{"#c(1 #:a)", "invalid complex number"},
+		// Parts that can't be made floats of the same format
+		{"#c(1000000000000000000000000000000000000000000 1.0f0)", "out of range"},
+		{"#c(1.0f0 1/1000000000000000000000000000000000000000000000000000000000000)", "out of range"},
+		// An argument is not allowed
+		{"#2c(1 2)", "invalid dispatch argument"},
+		{"#cc(1 2)", "invalid complex number"},
+	}
+	for _, tc := range testDefs {
+		r := newTestReader()
+		got, err := r.Read(mustInput(t, tc.input))
+		var readerErr reader.ReaderError
+		assert.True(t, errors.As(err, &readerErr), "input %q: %v", tc.input, err)
+		assert.ErrorContains(t, err, tc.wantErr, "input %q", tc.input)
+		assert.Nil(t, got, "input %q", tc.input)
+	}
+}
+
+func TestReaderComplexSkipped(t *testing.T) {
+	// A skipped complex number is only read, not checked
+	r := newTestReader()
+	for _, text := range []string{
+		"#c(1 2)", "#c(a b)", "#c()", "#c(1 2 3)", "#c 5", "#c(#c(1 2) 3)",
+		"#c(1000000000000000000000000000000000000000000 1.0f0)",
+	} {
+		got, err := readAll(t, r, "#+never "+text+" ok")
+		assert.NoError(t, err, "form %q", text)
+		assert.Equal(t, []string{"OK"}, got, "form %q", text)
+	}
+	// The syntax still has to be there
+	_, err := readAll(t, r, "#+never #c(1")
+	assert.ErrorContains(t, err, "end of file")
+	_, err = readAll(t, r, "#+never #c")
+	assert.ErrorContains(t, err, "end of file")
+
+	// And when it isn't skipped they are errors
+	for _, text := range []string{"#c(a b)", "#c()"} {
+		_, err := readAll(t, r, "#-never "+text+" ok")
+		assert.Error(t, err, "form %q", text)
+	}
+}
+
+func TestReaderComplexRoundTrip(t *testing.T) {
+	for _, base := range []int{2, 10, 16, 36} {
+		for _, input := range []string{
+			"#c(1 2)", "#c(-1 -2)", "#c(1/2 3/4)", "#c(1.5 2)", "#c(1.5d0 2)", "#c(5.0 0.0)",
+			"#c(1e10 -1d-10)", "#c(12345678901234567890 1)", "(#c(1 2) #c(1.5 2.5))", "#(#c(1/3 2))",
+		} {
+			r := newTestReader()
+			first, err := r.Read(mustInput(t, input))
+			assert.NoError(t, err, "input %q", input)
+			text := types.FormatBase(first, r.Package, base)
+			r.ReadBase = base
+			second, err := r.Read(mustInput(t, text))
+			assert.NoError(t, err, "base %d, text %q", base, text)
+			assert.Equal(t, first, second, "base %d, input %q, text %q", base, input, text)
+		}
+	}
+}

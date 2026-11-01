@@ -171,6 +171,7 @@ const (
 	NumberTypeInteger
 	NumberTypeFloat
 	NumberTypeRatio
+	NumberTypeComplex
 )
 
 // FloatFormat is the format of a float: single or double precision.
@@ -209,6 +210,8 @@ type Number struct {
 	floatVal *big.Float
 	format   FloatFormat
 	ratVal   *big.Rat
+	// re and im are the parts of a complex number, which are real numbers
+	re, im *Number
 }
 
 func NewNumberInteger(intVal *big.Int) *Number {
@@ -264,7 +267,8 @@ func (n Number) Float() *big.Float {
 	return new(big.Float).Copy(n.floatVal)
 }
 
-// Format returns the format of a float, or FloatFormatNone for other numbers.
+// Format returns the format of a float, or FloatFormatNone for other numbers,
+// including a complex number, whose parts have the format.
 func (n Number) Format() FloatFormat { return n.format }
 
 // Rat returns a copy of the value of a ratio, or nil for other numbers.
@@ -290,6 +294,8 @@ func (n Number) Equal(other *Number) bool {
 		return n.format == other.format && n.floatVal.Cmp(other.floatVal) == 0
 	case NumberTypeRatio:
 		return n.ratVal.Cmp(other.ratVal) == 0
+	case NumberTypeComplex:
+		return n.re.Equal(other.re) && n.im.Equal(other.im)
 	}
 	return false
 }
@@ -302,6 +308,10 @@ func (n Number) String() string {
 		return n.floatString()
 	case NumberTypeRatio:
 		return n.ratVal.String()
+	case NumberTypeComplex:
+		var sb strings.Builder
+		writeComplex(&sb, n.re, n.im, func(part *Number) { sb.WriteString(part.String()) })
+		return sb.String()
 	}
 	return "<unknown>"
 }
