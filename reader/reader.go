@@ -212,16 +212,6 @@ func (r *Reader) readSymbol(i *Input, tok *token) (types.Expression, error) {
 	return r.symbolExpr(sym), nil
 }
 
-// intern returns the symbol with the given name in the current package (see
-// symbolExpr for NIL).
-func (r *Reader) intern(i *Input, name string) (types.Expression, error) {
-	if err := r.checkPackage(i); err != nil {
-		return nil, err
-	}
-	sym, _ := r.Package.Intern(name)
-	return r.symbolExpr(sym), nil
-}
-
 // checkPackage returns an error if the current package is not in the package
 // set.
 func (r *Reader) checkPackage(i *Input) error {
@@ -543,15 +533,22 @@ func readDispatch(r *Reader, i *Input, initialChar rune) (types.Expression, erro
 	dispatch, _, err := i.ReadRune()
 	if err != nil {
 		if errors.Is(err, io.EOF) {
-			if r.suppress {
-				return types.Nil, nil
-			}
-			return r.intern(i, "#")
+			return nil, newReaderError(i, "unexpected end of file after #")
 		}
 		return nil, err
 	}
 
+	// CLHS 2.4.8 makes these an error: the space and the other whitespace
+	// characters, including Backspace, which the readtable has as a constituent
+	if r.rt.SyntaxTypeFunc(dispatch) == ReadtableSyntaxTypeWhitespace || dispatch == '\b' {
+		return nil, newReaderError(i, "%q after # is not valid syntax", dispatch)
+	}
+
 	switch dispatch {
+	case '<':
+		return nil, newReaderError(i, "unreadable object: #< is not valid syntax")
+	case ')':
+		return nil, newReaderError(i, "#) is not valid syntax")
 	case '|':
 		if err := readBlockComment(r, i); err != nil {
 			return nil, err

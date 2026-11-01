@@ -311,7 +311,7 @@ func TestReaderEmptyMultipleEscapeTerminators(t *testing.T) {
 		// A non-terminating macro character is a constituent inside the token
 		{`||#`, []types.Expression{sym("#")}},
 		{`||a#b`, []types.Expression{sym("A#B")}},
-		{`|| #`, []types.Expression{sym(""), sym("#")}},
+		{`|| a`, []types.Expression{sym(""), sym("A")}},
 	}
 	r := newTestReader()
 	for _, testDef := range testDefs {
@@ -1363,14 +1363,13 @@ func TestReaderDispatchRadix(t *testing.T) {
 		}
 	})
 
-	t.Run("hash at EOF returns hash symbol", func(t *testing.T) {
+	t.Run("hash at EOF errors", func(t *testing.T) {
 		i, err := reader.NewInput(strings.NewReader("#"))
 		assert.NoError(t, err)
 
 		tmp, err := r.Read(i)
-		assert.NoError(t, err)
-		assert.IsType(t, &types.Symbol{}, tmp)
-		assert.Equal(t, "#", tmp.(*types.Symbol).Name())
+		assert.ErrorContains(t, err, "end of file after #")
+		assert.Nil(t, tmp)
 	})
 
 	t.Run("digit radix without r errors", func(t *testing.T) {
@@ -1767,7 +1766,7 @@ func TestReaderPackageNotInSet(t *testing.T) {
 	} {
 		r := newTestReader()
 		set(r)
-		for _, input := range []string{"a", "(a)", "#"} {
+		for _, input := range []string{"a", "(a)"} {
 			i, err := reader.NewInput(strings.NewReader(input))
 			assert.NoError(t, err)
 			_, err = r.Read(i)
@@ -2436,7 +2435,7 @@ func TestReaderFeatures(t *testing.T) {
 		{"#+baz (a", "end of file"},
 		{"#+baz )", "unmatched close parenthesis"},
 		{"#+baz (a . )", "dot context error"},
-		{"#+baz #<", "unknown dispatch macro"},
+		{"#+baz #<", "unreadable object"},
 		{"#+baz \"abc", "end of file"},
 		// Skipping doesn't reach past the end of the list
 		{"(#+baz)", "unmatched close parenthesis"},
@@ -2663,4 +2662,53 @@ func TestReaderFormatBaseRoundTrip(t *testing.T) {
 			assert.Equal(t, expr, got, "base %d: %q", base, text)
 		}
 	}
+}
+
+func TestReaderDispatchIllegal(t *testing.T) {
+	// CLHS 2.4.8: #< and #) and # followed by whitespace or Backspace are errors
+	testDefs := []struct {
+		input   string
+		wantErr string
+	}{
+		{"#<", "unreadable object"},
+		{"#<foo>", "unreadable object"},
+		{"#<a b", "unreadable object"},
+		{"#)", "#) is not valid syntax"},
+		{"#", "end of file after #"},
+		{"(a #", "end of file after #"},
+		{"'#", "end of file after #"},
+		{"#+never #", "end of file after #"},
+		{"(a #))", "#) is not valid syntax"},
+		{"# ", `' ' after # is not valid syntax`},
+		{"# a", `' ' after # is not valid syntax`},
+		{"#\t", `'\t' after # is not valid syntax`},
+		{"#\n", `'\n' after # is not valid syntax`},
+		{"#\r", `'\r' after # is not valid syntax`},
+		{"#\f", `'\f' after # is not valid syntax`},
+		{"#\x7f", `'\x7f' after # is not valid syntax`},
+		{"#\b", `'\b' after # is not valid syntax`},
+		// In a list, a vector, a quote and a skipped form
+		{"(a # b)", "after # is not valid syntax"},
+		{"#(a # b)", "after # is not valid syntax"},
+		{"'# a", "after # is not valid syntax"},
+		{"#+never # a", "after # is not valid syntax"},
+		{"#+never #<a>", "unreadable object"},
+		{"#+never #)", "#) is not valid syntax"},
+	}
+	for _, tc := range testDefs {
+		r := newTestReader()
+		got, err := r.Read(mustInput(t, tc.input))
+		var readerErr reader.ReaderError
+		assert.True(t, errors.As(err, &readerErr), "input %q: %v", tc.input, err)
+		assert.ErrorContains(t, err, tc.wantErr, "input %q", tc.input)
+		assert.Nil(t, got, "input %q", tc.input)
+	}
+
+	// A # that is not at the start of a dispatch is not one
+	got, err := newTestReader().Read(mustInput(t, "a#b"))
+	assert.NoError(t, err)
+	assert.Equal(t, testSym("A#B"), got)
+	got, err = newTestReader().Read(mustInput(t, `#\ `))
+	assert.NoError(t, err)
+	assert.Equal(t, types.NewCharacter(' '), got)
 }
