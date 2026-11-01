@@ -27,6 +27,14 @@ type Reader struct {
 	// types.FloatFormatSingle or types.FloatFormatDouble: reading such a float
 	// with any other value is an error.
 	DefaultFloatFormat types.FloatFormat
+	// Features are the names of the keywords that #+ and #- test, such as "SBCL".
+	// They are compared exactly with the names the reader makes, so must already
+	// be in upper case. It is the equivalent of *features*.
+	Features []string
+	// suppress is set while a form is being skipped, the equivalent of
+	// *read-suppress*: the syntax is checked, but tokens are not turned into
+	// numbers or symbols, so nothing is interned and unknown names are not errors.
+	suppress bool
 	// backquoteDepth is the number of backquotes that the form being read is
 	// inside, less the commas between it and them.
 	backquoteDepth int
@@ -40,6 +48,7 @@ func NewReader(ps *types.Packages) *Reader {
 		Packages:           ps,
 		Package:            ps.User(),
 		DefaultFloatFormat: types.FloatFormatSingle,
+		Features:           []string{"COMMON-LISP", "GLISPR"},
 	}
 }
 
@@ -76,9 +85,18 @@ func (res readResult) isDot() bool {
 	return res.tok != nil && res.tok.isSingleDot()
 }
 
+// skipToken is the finish function for tokens while skipping a form. The value
+// is never used.
+func skipToken(i *Input, tok *token) (readResult, error) {
+	return readResult{expr: types.Nil, tok: tok}, nil
+}
+
 // finishToken converts a completed token into a number or a symbol. A token
 // made only of unescaped dots is an error, unless it is a single dot.
 func (r *Reader) finishToken(i *Input, tok *token) (readResult, error) {
+	if r.suppress {
+		return skipToken(i, tok)
+	}
 	if tok.allDots() && !tok.isSingleDot() {
 		return readResult{}, newReaderError(i, "token consists only of dots: %q", tok.String())
 	}
@@ -434,7 +452,11 @@ func readCharacter(r *Reader, i *Input) (types.Expression, error) {
 	}
 	tok := &token{}
 	tok.add(ch, true)
-	res, err := r.readItem(i, tok, finishCharacter)
+	finish := finishCharacter
+	if r.suppress {
+		finish = skipToken
+	}
+	res, err := r.readItem(i, tok, finish)
 	if err != nil {
 		return nil, err
 	}
@@ -478,7 +500,11 @@ func readUninterned(r *Reader, i *Input) (types.Expression, error) {
 			return nil, err
 		}
 	}
-	res, err := r.readItem(i, tok, r.finishUninterned)
+	finish := r.finishUninterned
+	if r.suppress {
+		finish = skipToken
+	}
+	res, err := r.readItem(i, tok, finish)
 	if err != nil {
 		return nil, err
 	}
@@ -507,6 +533,9 @@ func readDispatch(r *Reader, i *Input, initialChar rune) (types.Expression, erro
 	dispatch, _, err := i.ReadRune()
 	if err != nil {
 		if errors.Is(err, io.EOF) {
+			if r.suppress {
+				return types.Nil, nil
+			}
 			return r.intern(i, "#")
 		}
 		return nil, err
@@ -526,6 +555,10 @@ func readDispatch(r *Reader, i *Input, initialChar rune) (types.Expression, erro
 		return readQuoteForm(r, i, types.NameFunction)
 	case ':':
 		return readUninterned(r, i)
+	case '+':
+		return readFeatureConditional(r, i, true)
+	case '-':
+		return readFeatureConditional(r, i, false)
 	case 'b', 'B':
 		return readDispatchRadixNumber(r, i, 2)
 	case 'o', 'O':
@@ -540,6 +573,80 @@ func readDispatch(r *Reader, i *Input, initialChar rune) (types.Expression, erro
 	}
 
 	return nil, newReaderError(i, "unknown dispatch macro #%c", dispatch)
+}
+
+// readFeatureConditional reads the feature expression and the form after #+, or
+// after #- if want is false. The form is read if the expression is true and want
+// is true, or false and want is false, and is otherwise skipped, so the result is
+// no expression. A form that is already being skipped stays skipped.
+func readFeatureConditional(r *Reader, i *Input, want bool) (types.Expression, error) {
+	has, err := r.readFeatureExpr(i)
+	if err != nil {
+		return nil, err
+	}
+	if has == want && !r.suppress {
+		return r.readRequired(i)
+	}
+	defer func(prev bool) { r.suppress = prev }(r.suppress)
+	r.suppress = true
+	if _, err := r.readRequired(i); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+// readFeatureExpr reads a feature expression, in the KEYWORD package and with
+// nothing being skipped, and returns whether it is true: a keyword is true if it
+// is in Features, and (not x), (and x...) and (or x...) combine other
+// expressions (CLHS 24.1.2.1).
+func (r *Reader) readFeatureExpr(i *Input) (bool, error) {
+	if r.Packages == nil {
+		return false, newReaderError(i, "no package set")
+	}
+	defer func(pkg *types.Package, suppress bool) { r.Package, r.suppress = pkg, suppress }(r.Package, r.suppress)
+	r.Package, r.suppress = r.Packages.Keyword(), false
+	expr, err := r.readRequired(i)
+	if err != nil {
+		return false, err
+	}
+	return r.evalFeature(i, expr)
+}
+
+// evalFeature returns whether the feature expression expr is true.
+func (r *Reader) evalFeature(i *Input, expr types.Expression) (bool, error) {
+	kw := r.Packages.Keyword()
+	if sym, ok := expr.(*types.Symbol); ok && sym.Package() == kw {
+		return slices.Contains(r.Features, sym.Name()), nil
+	}
+	items, ok := types.ListItems(expr)
+	if !ok || len(items) == 0 {
+		return false, newReaderError(i, "invalid feature expression: %s", types.Format(expr, kw))
+	}
+	op, ok := items[0].(*types.Symbol)
+	if !ok || op.Package() != kw || (op.Name() != "AND" && op.Name() != "OR" && op.Name() != "NOT") {
+		return false, newReaderError(i, "invalid feature expression: %s", types.Format(expr, kw))
+	}
+	if op.Name() == "NOT" && len(items) != 2 {
+		return false, newReaderError(i, "invalid feature expression: NOT takes one argument")
+	}
+	// Every operand is checked, so a mistake is found even where an earlier operand
+	// already decides the result
+	allTrue, anyTrue := true, false
+	for _, item := range items[1:] {
+		val, err := r.evalFeature(i, item)
+		if err != nil {
+			return false, err
+		}
+		allTrue = allTrue && val
+		anyTrue = anyTrue || val
+	}
+	switch op.Name() {
+	case "AND":
+		return allTrue, nil
+	case "OR":
+		return anyTrue, nil
+	}
+	return !anyTrue, nil
 }
 
 func readBlockComment(r *Reader, i *Input) error {
@@ -604,11 +711,18 @@ func readDispatchArgument(r *Reader, i *Input, firstDigit rune) (types.Expressio
 		arg, err := strconv.Atoi(string(digits))
 		switch next {
 		case 'r', 'R':
+			if r.suppress {
+				// The number is skipped, so its radix is not checked
+				return readDispatchRadixNumber(r, i, 10)
+			}
 			if err != nil || arg < 2 || arg > 36 {
 				return nil, newReaderError(i, "invalid radix specifier: radix must be between 2 and 36")
 			}
 			return readDispatchRadixNumber(r, i, arg)
 		case '(':
+			if r.suppress {
+				return readVector(r, i, -1)
+			}
 			if err != nil || arg > maxVectorLength {
 				return nil, newReaderError(i, "invalid vector length: the limit is %d", maxVectorLength)
 			}
@@ -646,6 +760,9 @@ func readDispatchRadixNumber(r *Reader, i *Input, radix int) (types.Expression, 
 		numDigits.WriteRune(next)
 	}
 
+	if r.suppress {
+		return types.Nil, nil
+	}
 	// Only integers and ratios are allowed, not floats
 	tmpNum, err := readNumberToken(i, numDigits.String(), radix, types.ParseRational)
 	if err != nil {
