@@ -2,6 +2,7 @@ package reader_test
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"math/big"
 	"strings"
@@ -619,12 +620,13 @@ func TestReaderVectorErrors(t *testing.T) {
 		{`#1048577(a)`, "invalid vector length"},
 		{`#99999999999999999999(a)`, "invalid vector length"},
 		{`#999999999999999999999999999999(a)`, "invalid vector length"},
-		// An argument must be followed by r or (
+		// An argument must be followed by r, (, = or #
 		{`#3`, "end of file after dispatch argument"},
-		{`#3a`, "expected 'r' or '('"},
-		{`#3 (a)`, "expected 'r' or '('"},
-		{`#3)`, "expected 'r' or '('"},
-		{`#3#(a)`, "expected 'r' or '('"},
+		{`#3a`, "expected 'r', '(', '=' or '#'"},
+		{`#3 (a)`, "expected 'r', '(', '=' or '#'"},
+		{`#3)`, "expected 'r', '(', '=' or '#'"},
+		// A reference to a label that is not there, and then a list
+		{`#3#(a)`, "label #3# is not defined"},
 		// The length is not a radix
 		{`#1r(a)`, "radix must be between 2 and 36"},
 		{`#99999999999999999999r1`, "radix must be between 2 and 36"},
@@ -2711,4 +2713,337 @@ func TestReaderDispatchIllegal(t *testing.T) {
 	got, err = newTestReader().Read(mustInput(t, `#\ `))
 	assert.NoError(t, err)
 	assert.Equal(t, types.NewCharacter(' '), got)
+}
+
+func TestReaderLabels(t *testing.T) {
+	// Each input is read and printed again, which shows the structure: a label
+	// in the output is on a cell that is reached more than once
+	testDefs := []struct {
+		input string
+		want  string
+	}{
+		{"#1=a", "A"},
+		{"#1=()", "()"},
+		{"#1=5", "5"},
+		{"#1=\"s\"", `"s"`},
+		{"#1=(a b)", "(A B)"},
+		{"(#1=(a) #1#)", "(#1=(A) #1#)"},
+		{"(#1=(a) #1# #1#)", "(#1=(A) #1# #1#)"},
+		{"(#1=a #1#)", "(A A)"},
+		{"(#1=5 #1#)", "(5 5)"},
+		// Cycles
+		{"#1=(a . #1#)", "#1=(A . #1#)"},
+		{"#1=(a b . #1#)", "#1=(A B . #1#)"},
+		{"#1=(#1# a)", "#1=(#1# A)"},
+		{"#1=(#1#)", "#1=(#1#)"},
+		{"#1=(a #1# b)", "#1=(A #1# B)"},
+		{"(a . #1=(b . #1#))", "(A . #1=(B . #1#))"},
+		{"(a #1=(b . #1#))", "(A #1=(B . #1#))"},
+		{"#1=#(a #1#)", "#1=#(A #1#)"},
+		{"#1=#(#1# #1#)", "#1=#(#1# #1#)"},
+		{"#1=(#(a #1#))", "#1=(#(A #1#))"},
+		{"#1=#((a #1#))", "#1=#((A #1#))"},
+		{"#1=(a . #(#1#))", "#1=(A . #(#1#))"},
+		{"#3(#1=#(x #1#))", "#(#1=#(X #1#) #1# #1#)"},
+		{"#2(#1=(x . #1#))", "#(#1=(X . #1#) #1#)"},
+		// More than one label, nested, and referring to each other
+		{"(#1=(a) #2=(b) #2# #1#)", "(#1=(A) #2=(B) #2# #1#)"},
+		{"#1=(a #2=(b #1# #2#))", "#1=(A #2=(B #1# #2#))"},
+		{"#1=(#2=(b #1#) #2#)", "#1=(#2=(B #1#) #2#)"},
+		{"#1=(a #2=(b . #2#) . #1#)", "#1=(A #2=(B . #2#) . #1#)"},
+		{"(#1=(a . #2=(b #1# . #2#)) #2#)", "(#1=(A . #2=(B #1# . #2#)) #2#)"},
+		// A label that is the form of another one
+		{"(#1=(a . #2=#1#) #2#)", "(#1=(A . #1#) #1#)"},
+		{"#1=(#2=#1# . #2#)", "#1=(#1# . #1#)"},
+		// Numbers are numbers, so zeros before it make no difference
+		{"#0=(a . #0#)", "#1=(A . #1#)"},
+		{"#007=(a . #7#)", "#1=(A . #1#)"},
+		{"#12345678901=(a . #12345678901#)", "#1=(A . #1#)"},
+		{"(#1=(a) #01#)", "(#1=(A) #1#)"},
+		// In the other forms
+		{"'#1=(a . #1#)", "'#1=(A . #1#)"},
+		{"(quote #1=(a #1#))", "'#1=(A #1#)"},
+		{"#1='#1#", "#1='#1#"},
+		{"#1=#'#1#", "#1=#'#1#"},
+		{"`(,#1=(a . #1#))", "`(,#1=(A . #1#))"},
+		{"`#1=(a ,b #1#)", "`#1=(A ,B #1#)"},
+		{"(#1=(a) . #1#)", "(#1=(A) . #1#)"},
+		// Space and comments around the form
+		{"#1= (a . #1#)", "#1=(A . #1#)"},
+		{"#1=#|c|#(a . #1#)", "#1=(A . #1#)"},
+		{"#1=;c\n(a . #1#)", "#1=(A . #1#)"},
+		{"(#1=(a) ; c\n #1#)", "(#1=(A) #1#)"},
+		// A skipped conditional produces nothing, so the label is on the next form
+		{"#1=#+never x (a . #1#)", "#1=(A . #1#)"},
+	}
+	for _, tc := range testDefs {
+		r := newTestReader()
+		got, err := r.Read(mustInput(t, tc.input))
+		if !assert.NoError(t, err, "input %q", tc.input) {
+			continue
+		}
+		assert.Equal(t, tc.want, types.Format(got, r.Package), "input %q", tc.input)
+	}
+}
+
+func TestReaderLabelsIdentity(t *testing.T) {
+	r := newTestReader()
+
+	// The cell is the same one, not an equal one
+	got, err := r.Read(mustInput(t, "#1=(a . #1#)"))
+	assert.NoError(t, err)
+	cell, ok := got.(*types.Cons)
+	if assert.True(t, ok) {
+		assert.Same(t, cell, cell.Cdr())
+		assert.Same(t, testSym("A"), cell.Car())
+	}
+
+	got, err = r.Read(mustInput(t, "#1=(#1# . ())"))
+	assert.NoError(t, err)
+	cell = got.(*types.Cons)
+	assert.Same(t, cell, cell.Car())
+	assert.Equal(t, types.Nil, cell.Cdr())
+
+	got, err = r.Read(mustInput(t, "(#1=(a) #1# #1#)"))
+	assert.NoError(t, err)
+	items, ok := types.ListItems(got)
+	assert.True(t, ok)
+	if assert.Len(t, items, 3) {
+		assert.Same(t, items[0], items[1])
+		assert.Same(t, items[0], items[2])
+	}
+
+	// Equal forms written twice are two forms
+	got, err = r.Read(mustInput(t, "((a) (a))"))
+	assert.NoError(t, err)
+	items, _ = types.ListItems(got)
+	assert.NotSame(t, items[0], items[1])
+
+	got, err = r.Read(mustInput(t, "#1=#(a #1#)"))
+	assert.NoError(t, err)
+	vec := got.(*types.Vector)
+	assert.Same(t, vec, vec.At(1))
+
+	// A fill by #n( repeats the vector it is in
+	got, err = r.Read(mustInput(t, "#3(#1=#(a #1#))"))
+	assert.NoError(t, err)
+	vec = got.(*types.Vector)
+	assert.Equal(t, 3, vec.Len())
+	assert.Same(t, vec.At(0), vec.At(1))
+	assert.Same(t, vec.At(0), vec.At(2))
+
+	got, err = r.Read(mustInput(t, "#1=#3(#1#)"))
+	assert.NoError(t, err)
+	vec = got.(*types.Vector)
+	for k := 0; k < vec.Len(); k++ {
+		assert.Same(t, vec, vec.At(k))
+	}
+	assert.Equal(t, 3, vec.Len())
+
+	// A label that is the form of another one is that form
+	got, err = r.Read(mustInput(t, "(#1=(a . #2=#1#) #2#)"))
+	assert.NoError(t, err)
+	items, _ = types.ListItems(got)
+	if assert.Len(t, items, 2) {
+		assert.Same(t, items[0], items[1])
+		assert.Same(t, items[0], items[0].(*types.Cons).Cdr())
+	}
+
+	// A proper list is not one when it is circular
+	got, err = r.Read(mustInput(t, "#1=(a b . #1#)"))
+	assert.NoError(t, err)
+	_, ok = types.ListItems(got)
+	assert.False(t, ok)
+}
+
+func TestReaderLabelErrors(t *testing.T) {
+	testDefs := []struct {
+		input   string
+		wantErr string
+	}{
+		{"#1#", "label #1# is not defined"},
+		{"(#1#)", "label #1# is not defined"},
+		{"(#1=a #2#)", "label #2# is not defined"},
+		// The label is only in scope in what follows its definition
+		{"(#1# #1=a)", "label #1# is not defined"},
+		{"#1=a #1#", ""},
+		{"(#1=a #1=b)", "label #1= is defined more than once"},
+		{"(#1=a (#1=b))", "label #1= is defined more than once"},
+		{"#1=(a #1=b)", "label #1= is defined more than once"},
+		{"#1=#1#", "label #1= refers to itself"},
+		{"#1=#2=#1#", "label #1= refers to itself"},
+		{"(#1=#2=#1# #2#)", "label #1= refers to itself"},
+		{"#1=", "end of file"},
+		{"#1=)", "unmatched close parenthesis"},
+		{"(#1=)", "unmatched close parenthesis"},
+		{"#1=;c", "end of file"},
+		{"(a . #1=)", "unmatched close parenthesis"},
+		{"#99999999999999999999=a", "label number is too large"},
+		{"#99999999999999999999#", "label number is too large"},
+		{"#=a", "unknown dispatch macro"},
+		{"##", "unknown dispatch macro"},
+		{"#1", "end of file"},
+		{"#1a", "invalid dispatch argument: expected 'r', '(', '=' or '#'"},
+		{"#1 a", "invalid dispatch argument"},
+	}
+	for _, tc := range testDefs {
+		r := newTestReader()
+		got, err := r.Read(mustInput(t, tc.input))
+		if tc.wantErr == "" {
+			// Not an error: the first form is read and the rest is left
+			assert.NoError(t, err, "input %q", tc.input)
+			continue
+		}
+		var readerErr reader.ReaderError
+		assert.True(t, errors.As(err, &readerErr), "input %q: %v", tc.input, err)
+		assert.ErrorContains(t, err, tc.wantErr, "input %q", tc.input)
+		assert.Nil(t, got, "input %q", tc.input)
+	}
+}
+
+func TestReaderLabelScope(t *testing.T) {
+	r := newTestReader()
+	// The labels of one read are gone for the next
+	i := mustInput(t, "#1=(a . #1#) #1#")
+	got, err := r.Read(i)
+	assert.NoError(t, err)
+	assert.NotNil(t, got)
+	_, err = r.Read(i)
+	assert.ErrorContains(t, err, "label #1# is not defined")
+
+	// The same number can be used again, after the read that defined it ends
+	i = mustInput(t, "(#1=(a) #1#) (#1=(b) #1#)")
+	for _, want := range []string{"(#1=(A) #1#)", "(#1=(B) #1#)"} {
+		got, err = r.Read(i)
+		assert.NoError(t, err)
+		assert.Equal(t, want, types.Format(got, r.Package))
+	}
+
+	// After an error too
+	for _, bad := range []string{"(#1=a #1=b)", "#1=#1#", "(#1=a", "(#1=a #2#)"} {
+		_, err = r.Read(mustInput(t, bad))
+		assert.Error(t, err, "input %q", bad)
+		got, err = r.Read(mustInput(t, "(#1=(a) #1#)"))
+		assert.NoError(t, err, "after %q", bad)
+		assert.Equal(t, "(#1=(A) #1#)", types.Format(got, r.Package), "after %q", bad)
+	}
+
+	// Skipped and quoted forms are read in the same call, so they share labels
+	got, err = r.Read(mustInput(t, "(#1=(a) '#1# #+always #1# #-always #1#)"))
+	assert.NoError(t, err)
+	assert.Equal(t, "(#1=(A) '#1# #1#)", types.Format(got, r.Package))
+
+	// The reader state is back to normal afterward: a label can be redefined
+	// and the next read has no placeholder in it
+	got, err = r.Read(mustInput(t, "#1=(a)"))
+	assert.NoError(t, err)
+	assert.Equal(t, "(A)", types.Format(got, r.Package))
+}
+
+func TestReaderLabelsSkipped(t *testing.T) {
+	r := newTestReader()
+	// A skipped form is read, but its labels are not defined
+	got, err := readAll(t, r, "#+never #1=(a . #1#) ok")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"OK"}, got)
+
+	got, err = readAll(t, r, "#+never (#1=(a #1#) #1# #2#) ok")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"OK"}, got)
+
+	got, err = readAll(t, r, "#+never (#99999999999999999999=a #99999999999999999999#) ok")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"OK"}, got)
+
+	// So a label defined in a skipped form is not there afterward
+	_, err = r.Read(mustInput(t, "(#+never #1=a #1#)"))
+	assert.ErrorContains(t, err, "label #1# is not defined")
+	// And one defined before it still is
+	got, err = readAll(t, r, "(#1=(a) #+never #1=b #1#)")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"(#1=(A) #1#)"}, got)
+
+	// The syntax of a skipped form is still checked
+	_, err = readAll(t, r, "#+never #1=")
+	assert.ErrorContains(t, err, "end of file")
+	_, err = readAll(t, r, "#+never #1=)")
+	assert.ErrorContains(t, err, "unmatched close parenthesis")
+}
+
+func TestReaderLabelsFeature(t *testing.T) {
+	// A circular feature expression is a feature expression error and not an
+	// endless loop
+	r := newTestReader()
+	for _, input := range []string{
+		"#+#1=(and . #1#) a",
+		"#+#1=(and #1#) a",
+		"#+(or #1=(not . #1#)) a",
+		"#-#1=(or . #1#) a",
+	} {
+		_, err := r.Read(mustInput(t, input))
+		assert.ErrorContains(t, err, "invalid feature expression", "input %q", input)
+	}
+	// A feature expression that shares parts of itself is evaluated once for each
+	// part, not once for each way to reach it
+	expr := "common-lisp"
+	for k := 60; k >= 1; k-- {
+		expr = fmt.Sprintf("(and #%d=%s #%d#)", k, expr, k)
+	}
+	got, err := readAll(t, r, "#+"+expr+" a")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"A"}, got)
+
+	// A label on a form that is fine
+	got, err = readAll(t, r, "#+(or #1=nope #1# glispr) a")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"A"}, got)
+}
+
+func TestReaderLabelsRoundTrip(t *testing.T) {
+	// What is printed reads back as the same structure, which prints the same
+	for _, input := range []string{
+		"#1=(a . #1#)",
+		"#1=(a b #1# . #1#)",
+		"(#1=(a) #2=(b #1#) #2# #1#)",
+		"#1=(a #2=(b #1# #2#) #(#1# #2# x))",
+		"#1=#(#1# (#1#) #(#1#))",
+		"(#1=#(a) #1# (#1#))",
+		"'#1=(quote #1# . #1#)",
+		"(#1=(a . #2=(b . #2#)) #1# #2#)",
+		"`(#1=(a ,b) ,@c #1#)",
+		"#1=(#1# . #1#)",
+	} {
+		r := newTestReader()
+		first, err := r.Read(mustInput(t, input))
+		assert.NoError(t, err, "input %q", input)
+		text := types.Format(first, r.Package)
+		second, err := r.Read(mustInput(t, text))
+		assert.NoError(t, err, "text %q", text)
+		assert.Equal(t, text, types.Format(second, r.Package), "input %q", input)
+	}
+}
+
+func TestReaderLabelsDeep(t *testing.T) {
+	// A long list and a deeply nested one with a reference to the outside
+	r := newTestReader()
+	const n = 20000
+	got, err := r.Read(mustInput(t, "#1=("+strings.Repeat("a ", n)+". #1#)"))
+	assert.NoError(t, err)
+	cell := got.(*types.Cons)
+	count := 1
+	for next := cell.Cdr().(*types.Cons); next != cell; next = next.Cdr().(*types.Cons) {
+		count++
+	}
+	assert.Equal(t, n, count)
+
+	got, err = r.Read(mustInput(t, "#1="+strings.Repeat("(", 2000)+"#1#"+strings.Repeat(")", 2000)))
+	assert.NoError(t, err)
+	depth := 0
+	cur := got
+	for cur != got || depth == 0 {
+		c := cur.(*types.Cons)
+		cur = c.Car()
+		depth++
+	}
+	assert.Equal(t, 2000, depth)
 }

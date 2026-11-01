@@ -30,4 +30,7 @@ func (v Vector) At(i int) Expression { return v.items[i] }
 // Items returns a copy of the items in the vector.
 func (v Vector) Items() []Expression { return slices.Clone(v.items) }
 
-func (v Vector) String() string { return Format(&v, nil) }
+// String returns the vector in reader syntax. It has a pointer receiver so that
+// Format sees the vector itself, not a copy, and can tell when it contains
+// itself.
+func (v *Vector) String() string { return Format(v, nil) }

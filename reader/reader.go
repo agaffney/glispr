@@ -41,6 +41,11 @@ type Reader struct {
 	// *read-suppress*: the syntax is checked, but tokens are not turned into
 	// numbers or symbols, so nothing is interned and unknown names are not errors.
 	suppress bool
+	// labels are the labels defined by #n= in the expression being read, which
+	// are in scope until the outermost Read ends, and readDepth is how many Read
+	// calls are active.
+	labels    map[int]*label
+	readDepth int
 	// backquoteDepth is the number of backquotes that the form being read is
 	// inside, less the commas between it and them.
 	backquoteDepth int
@@ -57,6 +62,17 @@ func NewReader(ps *types.Packages) *Reader {
 		ReadBase:           10,
 		Features:           []string{"COMMON-LISP", "GLISPR"},
 	}
+}
+
+// label is a form named by #n=. Until the form has been read, references to it
+// are the placeholder, which is replaced once it is complete.
+type label struct {
+	placeholder *types.Placeholder
+	// used is set if the placeholder was returned, so there is something to
+	// replace
+	used     bool
+	resolved bool
+	value    types.Expression
 }
 
 // errSkipped is returned by readOne when a macro (such as a comment) consumed
@@ -229,7 +245,19 @@ func (r *Reader) symbolExpr(sym *types.Symbol) types.Expression {
 	return sym
 }
 
+// Read reads one expression. It returns nil and no error at the end of the
+// input. An expression can contain itself or share parts of itself, if it was
+// written with #n= and #n#, so code that walks the result must allow for cycles.
 func (r *Reader) Read(i *Input) (types.Expression, error) {
+	// The labels belong to the outermost call, so the calls that read a form
+	// inside another one share them
+	r.readDepth++
+	defer func() {
+		r.readDepth--
+		if r.readDepth == 0 {
+			r.labels = nil
+		}
+	}()
 	for {
 		res, err := r.readOne(i)
 		if errors.Is(err, errSkipped) {
@@ -616,11 +644,20 @@ func (r *Reader) readFeatureExpr(i *Input) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return r.evalFeature(i, expr)
+	return r.evalFeature(i, expr, &featureState{})
+}
+
+// featureState is what evalFeature knows about the lists it has seen, which can
+// be shared or contain themselves when they are written with labels.
+type featureState struct {
+	// active are the lists being evaluated, and results are the values of the
+	// ones that are done, so a list that is shared is only evaluated once
+	active  map[types.Expression]bool
+	results map[types.Expression]bool
 }
 
 // evalFeature returns whether the feature expression expr is true.
-func (r *Reader) evalFeature(i *Input, expr types.Expression) (bool, error) {
+func (r *Reader) evalFeature(i *Input, expr types.Expression, state *featureState) (bool, error) {
 	kw := r.Packages.Keyword()
 	if sym, ok := expr.(*types.Symbol); ok && sym.Package() == kw {
 		return slices.Contains(r.Features, sym.Name()), nil
@@ -629,6 +666,17 @@ func (r *Reader) evalFeature(i *Input, expr types.Expression) (bool, error) {
 	if !ok || len(items) == 0 {
 		return false, newReaderError(i, "invalid feature expression: %s", types.Format(expr, kw))
 	}
+	if val, done := state.results[expr]; done {
+		return val, nil
+	}
+	if state.active[expr] {
+		return false, newReaderError(i, "invalid feature expression: it contains itself: %s", types.Format(expr, kw))
+	}
+	if state.active == nil {
+		state.active, state.results = map[types.Expression]bool{}, map[types.Expression]bool{}
+	}
+	state.active[expr] = true
+	defer delete(state.active, expr)
 	op, ok := items[0].(*types.Symbol)
 	if !ok || op.Package() != kw || (op.Name() != "AND" && op.Name() != "OR" && op.Name() != "NOT") {
 		return false, newReaderError(i, "invalid feature expression: %s", types.Format(expr, kw))
@@ -640,20 +688,22 @@ func (r *Reader) evalFeature(i *Input, expr types.Expression) (bool, error) {
 	// already decides the result
 	allTrue, anyTrue := true, false
 	for _, item := range items[1:] {
-		val, err := r.evalFeature(i, item)
+		val, err := r.evalFeature(i, item, state)
 		if err != nil {
 			return false, err
 		}
 		allTrue = allTrue && val
 		anyTrue = anyTrue || val
 	}
+	result := !anyTrue
 	switch op.Name() {
 	case "AND":
-		return allTrue, nil
+		result = allTrue
 	case "OR":
-		return anyTrue, nil
+		result = anyTrue
 	}
-	return !anyTrue, nil
+	state.results[expr] = result
+	return result, nil
 }
 
 func readBlockComment(r *Reader, i *Input) error {
@@ -734,9 +784,80 @@ func readDispatchArgument(r *Reader, i *Input, firstDigit rune) (types.Expressio
 				return nil, newReaderError(i, "invalid vector length: the limit is %d", maxVectorLength)
 			}
 			return readVector(r, i, arg)
+		case '=', '#':
+			if r.suppress {
+				return r.skipLabel(i, next == '=')
+			}
+			if err != nil {
+				return nil, newReaderError(i, "label number is too large")
+			}
+			if next == '=' {
+				return r.readLabel(i, arg)
+			}
+			return r.readLabelRef(i, arg)
 		}
-		return nil, newReaderError(i, "invalid dispatch argument: expected 'r' or '('")
+		return nil, newReaderError(i, "invalid dispatch argument: expected 'r', '(', '=' or '#'")
 	}
+}
+
+// skipLabel is #n= or #n# in a form that is being skipped. Nothing is defined,
+// so a skipped #n= doesn't make a label for later forms, but its form is read
+// and skipped with it.
+func (r *Reader) skipLabel(i *Input, definition bool) (types.Expression, error) {
+	if definition {
+		if _, err := r.readRequired(i); err != nil {
+			return nil, err
+		}
+	}
+	return types.Nil, nil
+}
+
+// readLabel reads the form after #n=, which can refer to itself with #n#. The
+// form is built with a placeholder for each reference, which is replaced when the
+// form is complete.
+func (r *Reader) readLabel(i *Input, n int) (types.Expression, error) {
+	if r.labels[n] != nil {
+		return nil, newReaderError(i, "label #%d= is defined more than once", n)
+	}
+	if r.labels == nil {
+		r.labels = map[int]*label{}
+	}
+	l := &label{placeholder: types.NewPlaceholder(n)}
+	r.labels[n] = l
+	expr, err := r.readRequired(i)
+	if err != nil {
+		return nil, err
+	}
+	// There is nothing to say what the form is
+	if expr == types.Expression(l.placeholder) {
+		return nil, newReaderError(i, "label #%d= refers to itself", n)
+	}
+	if l.used {
+		types.Substitute(expr, l.placeholder, expr)
+		// A label inside this form can have been given the placeholder as its form
+		for _, other := range r.labels {
+			if other.value == types.Expression(l.placeholder) {
+				other.value = expr
+			}
+		}
+	}
+	l.resolved = true
+	l.value = expr
+	return expr, nil
+}
+
+// readLabelRef reads #n#, which is the form labeled n. If that form has not been
+// completed it is a placeholder for it.
+func (r *Reader) readLabelRef(i *Input, n int) (types.Expression, error) {
+	l := r.labels[n]
+	switch {
+	case l == nil:
+		return nil, newReaderError(i, "label #%d# is not defined", n)
+	case l.resolved:
+		return l.value, nil
+	}
+	l.used = true
+	return l.placeholder, nil
 }
 
 // readDispatchRadixNumber reads the digits of a number in the given radix, once
