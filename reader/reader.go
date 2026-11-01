@@ -590,6 +590,8 @@ func readDispatch(r *Reader, i *Input, initialChar rune) (types.Expression, erro
 		return readQuoteForm(r, i, types.NameFunction)
 	case ':':
 		return readUninterned(r, i)
+	case '*':
+		return readBitVector(r, i, -1)
 	case '+':
 		return readFeatureConditional(r, i, true)
 	case '-':
@@ -784,6 +786,14 @@ func readDispatchArgument(r *Reader, i *Input, firstDigit rune) (types.Expressio
 				return nil, newReaderError(i, "invalid vector length: the limit is %d", maxVectorLength)
 			}
 			return readVector(r, i, arg)
+		case '*':
+			if r.suppress {
+				return readBitVector(r, i, -1)
+			}
+			if err != nil || arg > maxVectorLength {
+				return nil, newReaderError(i, "invalid bit vector length: the limit is %d", maxVectorLength)
+			}
+			return readBitVector(r, i, arg)
 		case '=', '#':
 			if r.suppress {
 				return r.skipLabel(i, next == '=')
@@ -796,8 +806,81 @@ func readDispatchArgument(r *Reader, i *Input, firstDigit rune) (types.Expressio
 			}
 			return r.readLabelRef(i, arg)
 		}
-		return nil, newReaderError(i, "invalid dispatch argument: expected 'r', '(', '=' or '#'")
+		return nil, newReaderError(i, "invalid dispatch argument: expected 'r', '(', '*', '=' or '#'")
 	}
+}
+
+// readBitVector reads the bits after #* or #n*, which are the characters 0 and 1
+// in one token. A length of -1 means that none was given. With a length, the
+// vector is filled out to it by repeating the last bit, and having more bits
+// than that is an error.
+func readBitVector(r *Reader, i *Input, length int) (types.Expression, error) {
+	finish := func(i *Input, tok *token) (readResult, error) {
+		if r.suppress {
+			return skipToken(i, tok)
+		}
+		if tok.hasEscape() {
+			return readResult{}, newReaderError(i, "escape in bit vector: %q", tok.String())
+		}
+		bits := make([]byte, len(tok.chars))
+		for k, c := range tok.chars {
+			if c.r != '0' && c.r != '1' {
+				return readResult{}, newReaderError(i, "invalid character %q in bit vector: %q", c.r, tok.String())
+			}
+			bits[k] = byte(c.r - '0')
+		}
+		expr, err := makeBitVector(i, bits, length)
+		return readResult{expr: expr, tok: tok}, err
+	}
+	// With no bits the vector is empty, so the token ends at once
+	ch, _, err := i.ReadRune()
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	tok := &token{}
+	if err == nil {
+		switch r.rt.SyntaxTypeFunc(ch) {
+		case ReadtableSyntaxTypeWhitespace, ReadtableSyntaxTypeMacroTerminating:
+			err = io.EOF
+			if err := i.UnreadRune(); err != nil {
+				return nil, err
+			}
+		case ReadtableSyntaxTypeMacroNonTerminating:
+			// readItem would run its macro function at the start of a token, but
+			// here it is part of the token, and makes it invalid
+			tok.add(ch, false)
+		default:
+			if err := i.UnreadRune(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if errors.Is(err, io.EOF) {
+		res, err := finish(i, tok)
+		return res.expr, err
+	}
+	res, err := r.readItem(i, tok, finish)
+	if err != nil {
+		return nil, err
+	}
+	return res.expr, nil
+}
+
+// makeBitVector returns the bit vector of bits, filled out to length unless that
+// is -1.
+func makeBitVector(i *Input, bits []byte, length int) (types.Expression, error) {
+	if length >= 0 {
+		if len(bits) > length {
+			return nil, newReaderError(i, "bit vector of length %d has too many bits (%d)", length, len(bits))
+		}
+		if len(bits) == 0 && length > 0 {
+			return nil, newReaderError(i, "bit vector of length %d has no bits to fill it with", length)
+		}
+		for len(bits) < length {
+			bits = append(bits, bits[len(bits)-1])
+		}
+	}
+	return types.NewBitVector(bits), nil
 }
 
 // skipLabel is #n= or #n# in a form that is being skipped. Nothing is defined,
