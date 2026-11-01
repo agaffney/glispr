@@ -27,6 +27,9 @@ type Reader struct {
 	// types.FloatFormatSingle or types.FloatFormatDouble: reading such a float
 	// with any other value is an error.
 	DefaultFloatFormat types.FloatFormat
+	// backquoteDepth is the number of backquotes that the form being read is
+	// inside, less the commas between it and them.
+	backquoteDepth int
 }
 
 // NewReader returns a reader that interns symbols in ps, with COMMON-LISP-USER
@@ -360,16 +363,56 @@ func readQuote(r *Reader, i *Input, initialChar rune) (types.Expression, error) 
 // readQuoteForm reads an expression and returns it in a list with the symbol
 // with the given name in COMMON-LISP, which is how 'x and #'x are read.
 func readQuoteForm(r *Reader, i *Input, name string) (types.Expression, error) {
-	// The package set is needed to find COMMON-LISP, but the current package is not
+	return r.readPrefixForm(i, types.NameCommonLisp, name, 0)
+}
+
+// readBackquote reads the expression after ` and returns it in a list with
+// GLISPR:QUASIQUOTE.
+func readBackquote(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
+	return r.readPrefixForm(i, types.NameGlispr, types.NameQuasiquote, 1)
+}
+
+// readComma reads the expression after , and returns it in a list with
+// GLISPR:UNQUOTE, or after ,@ or ,. with UNQUOTE-SPLICING or UNQUOTE-NSPLICING.
+// A comma is only allowed inside a backquote, and each comma ends one level of
+// it.
+func readComma(r *Reader, i *Input, initialChar rune) (types.Expression, error) {
+	if r.backquoteDepth == 0 {
+		return nil, newReaderError(i, "comma is not inside a backquote")
+	}
+	name := types.NameUnquote
+	next, _, err := i.ReadRune()
+	switch {
+	case err == nil && next == '@':
+		name = types.NameUnquoteSplicing
+	case err == nil && next == '.':
+		name = types.NameUnquoteNSplicing
+	case err == nil:
+		if err := i.UnreadRune(); err != nil {
+			return nil, err
+		}
+	case !errors.Is(err, io.EOF):
+		return nil, err
+	}
+	return r.readPrefixForm(i, types.NameGlispr, name, -1)
+}
+
+// readPrefixForm reads an expression and returns it in a list with the symbol
+// with the given name in the package with pkgName. While the expression is read
+// the backquote depth changes by depthDelta.
+func (r *Reader) readPrefixForm(i *Input, pkgName, name string, depthDelta int) (types.Expression, error) {
+	// The package set is needed to find the symbol, but the current package is not
 	if r.Packages == nil {
 		return nil, newReaderError(i, "no package set")
 	}
+	r.backquoteDepth += depthDelta
+	defer func() { r.backquoteDepth -= depthDelta }()
 	item, err := r.readRequired(i)
 	if err != nil {
 		return nil, err
 	}
 	// The symbol is always there, as NewPackages exports it
-	sym, _ := r.Packages.CommonLisp().Find(name)
+	sym, _ := r.Packages.Find(pkgName).Find(name)
 	return types.NewList([]types.Expression{sym, item}), nil
 }
 

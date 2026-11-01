@@ -48,6 +48,21 @@ func TestStandardPackages(t *testing.T) {
 		assert.Equal(t, types.SymbolStatusInherited, status, name)
 	}
 
+	// The backquote symbols are exported from GLISPR, which uses nothing
+	glispr := ps.Glispr()
+	assert.Same(t, glispr, ps.Find("GLISPR"))
+	assert.Empty(t, glispr.Uses())
+	for _, name := range []string{"QUASIQUOTE", "UNQUOTE", "UNQUOTE-SPLICING", "UNQUOTE-NSPLICING"} {
+		sym, status := glispr.Find(name)
+		if assert.NotNil(t, sym, name) {
+			assert.Equal(t, types.SymbolStatusExternal, status, name)
+			assert.Same(t, glispr, sym.Package(), name)
+		}
+		// Not inherited by the user package
+		userSym, _ := user.Find(name)
+		assert.Nil(t, userSym, name)
+	}
+
 	// Nothing else is there yet, and each set of packages is separate
 	sym, status := cl.Find("CAR")
 	assert.Nil(t, sym)
