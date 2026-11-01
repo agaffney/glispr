@@ -176,6 +176,8 @@ func (p *printer) write(e Expression, depth int) {
 		switch {
 		case p.base != 10 && v.typ == NumberTypeInteger:
 			sb.WriteString(v.String() + ".")
+		case v.typ == NumberTypeComplex:
+			writeComplex(sb, v.re, v.im, func(part *Number) { p.write(part, depth) })
 		case p.base != 10 && v.typ == NumberTypeRatio:
 			sb.WriteString("#10r" + v.String())
 		default:
