@@ -2551,3 +2551,116 @@ func TestReaderFeaturesDefault(t *testing.T) {
 	other := newTestReader()
 	assert.NotContains(t, other.Features, "EXTRA")
 }
+
+func TestReaderReadBase(t *testing.T) {
+	int64Num := func(n int64) types.Expression { return types.NewNumberInteger(big.NewInt(n)) }
+
+	testDefs := []struct {
+		base  int
+		input string
+		want  types.Expression
+	}{
+		{10, "10", int64Num(10)},
+		{16, "10", int64Num(16)},
+		{16, "ff", int64Num(255)},
+		{16, "FF", int64Num(255)},
+		{16, "-ff", int64Num(-255)},
+		{16, "+ff", int64Num(255)},
+		{2, "101", int64Num(5)},
+		{8, "17", int64Num(15)},
+		{36, "zz", int64Num(1295)},
+		{16, "a/b", types.NewNumberRatio(big.NewRat(10, 11))},
+		{2, "1/10", types.NewNumberRatio(big.NewRat(1, 2))},
+		// A ratio equal to a whole number is an integer
+		{16, "a/5", int64Num(2)},
+		// A trailing decimal point makes an integer decimal in any base
+		{16, "10.", int64Num(10)},
+		{2, "10.", int64Num(10)},
+		{16, "-10.", int64Num(-10)},
+		// Floats are always decimal
+		{16, "1.5d0", doubleFloat(1.5)},
+		{16, "10.5f0", singleFloat(10.5)},
+		{2, "1.5", singleFloat(1.5)},
+		// Not numbers in the base, so symbols
+		{10, "ff", testSym("FF")},
+		{8, "8", testSym("8")},
+		{8, "9/2", testSym("9/2")},
+		{2, "102", testSym("102")},
+		{16, "g", testSym("G")},
+		{16, "ff.", testSym("FF.")},
+		// An escape makes a symbol, as it does in base 10
+		{16, `|ff|`, testSym("ff")},
+		{16, `\ff`, testSym("fF")},
+		// The prefixes pick their own base
+		{16, "#b101", int64Num(5)},
+		{2, "#xff", int64Num(255)},
+		{16, "#10r10", int64Num(10)},
+		{2, "#16rff", int64Num(255)},
+		// Inside other forms
+		{16, "(g b)", types.NewList([]types.Expression{testSym("G"), int64Num(11)})},
+	}
+	for _, tc := range testDefs {
+		r := newTestReader()
+		r.ReadBase = tc.base
+		got, err := r.Read(mustInput(t, tc.input))
+		assert.NoError(t, err, "base %d: %q", tc.base, tc.input)
+		assert.Equal(t, tc.want, got, "base %d: %q", tc.base, tc.input)
+	}
+
+	assert.Equal(t, 10, newTestReader().ReadBase)
+}
+
+func TestReaderReadBaseInvalid(t *testing.T) {
+	for _, base := range []int{-1, 0, 1, 37, 100} {
+		r := newTestReader()
+		r.ReadBase = base
+		for _, input := range []string{"1", "a", "(a)", "1.5", "#:a b"} {
+			_, err := r.Read(mustInput(t, input))
+			if input == "#:a b" {
+				// The name after #: is never a number
+				assert.NoError(t, err, "base %d: %q", base, input)
+				continue
+			}
+			assert.ErrorContains(t, err, "invalid read base", "base %d: %q", base, input)
+		}
+		// Reading that doesn't look at the base still works
+		got, err := r.Read(mustInput(t, `"s"`))
+		assert.NoError(t, err)
+		assert.Equal(t, types.NewString("s"), got)
+	}
+}
+
+func TestReaderFormatBaseRoundTrip(t *testing.T) {
+	// A printed expression reads back as the same one for a reader with the same
+	// base, whatever the base is
+	ps := types.NewPackages()
+	int64Num := func(n int64) types.Expression { return types.NewNumberInteger(big.NewInt(n)) }
+	exprs := []types.Expression{
+		int64Num(0), int64Num(10), int64Num(-10), int64Num(255), int64Num(1295),
+		types.NewNumberRatio(big.NewRat(1, 2)),
+		types.NewNumberRatio(big.NewRat(-10, 11)),
+		singleFloat(1.5), doubleFloat(-10.25),
+		// The exponent marker is a digit in bases above 13, so these test that a
+		// float is still read as one
+		singleFloat(1), doubleFloat(1), singleFloat(1e5), doubleFloat(1e5),
+		singleFloat(1e-5), doubleFloat(-1e30), singleFloat(1e30),
+		types.NewList([]types.Expression{int64Num(10), types.NewNumberRatio(big.NewRat(3, 4))}),
+		types.NewVector([]types.Expression{int64Num(11)}),
+	}
+	names := []string{"A", "FF", "10", "1E5", "1/2", "+A", "-1", "1.", "Z", "ZZ", "1+", "A1", "B2", "E", "1.5", ".5E1"}
+	for _, name := range names {
+		sym, _ := ps.User().Intern(name)
+		exprs = append(exprs, sym)
+		exprs = append(exprs, types.NewList([]types.Expression{sym, sym}))
+	}
+	for base := 2; base <= 36; base++ {
+		for _, expr := range exprs {
+			text := types.FormatBase(expr, ps.User(), base)
+			r := reader.NewReader(ps)
+			r.ReadBase = base
+			got, err := r.Read(mustInput(t, text))
+			assert.NoError(t, err, "base %d: %q", base, text)
+			assert.Equal(t, expr, got, "base %d: %q", base, text)
+		}
+	}
+}

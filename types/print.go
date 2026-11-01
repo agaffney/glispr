@@ -17,16 +17,30 @@ import (
 // as Nil instead. A value the reader can't produce prints as diagnostic text
 // that it can't read back, such as <nil> for a nil *Cons.
 func Format(e Expression, current *Package) string {
+	return FormatBase(e, current, 10)
+}
+
+// FormatBase is like Format, but for a reader that reads tokens as numbers in
+// base, the equivalent of *read-base*. It must be from 2 to 36, or FormatBase
+// panics. A symbol that would read as a number in that base is written with
+// escapes, as in |FF| for base 16. When the base is not 10, an integer is
+// written with a trailing decimal point and a ratio after #10r, which a reader
+// reads as decimal whatever its base is. A float is always decimal.
+func FormatBase(e Expression, current *Package, base int) string {
+	if base < 2 || base > 36 {
+		panic("types: FormatBase called with a base outside 2 to 36")
+	}
 	var sb strings.Builder
-	writeExpr(&sb, e, current, 0)
+	writeExpr(&sb, e, current, 0, base)
 	return sb.String()
 }
 
-// writeExpr writes e, which is inside depth levels of backquote.
-func writeExpr(sb *strings.Builder, e Expression, current *Package, depth int) {
+// writeExpr writes e, which is inside depth levels of backquote, for a reader
+// with the read base base.
+func writeExpr(sb *strings.Builder, e Expression, current *Package, depth, base int) {
 	switch v := e.(type) {
 	case *Symbol:
-		writeSymbol(sb, v, current)
+		writeSymbol(sb, v, current, base)
 	case *Cons:
 		if v == nil {
 			sb.WriteString("<nil>")
@@ -35,12 +49,12 @@ func writeExpr(sb *strings.Builder, e Expression, current *Package, depth int) {
 		if form, item, ok := prefixFormOf(v, depth); ok {
 			sb.WriteString(form.prefix)
 			if form.prefix != "," {
-				writeExpr(sb, item, current, depth+form.delta)
+				writeExpr(sb, item, current, depth+form.delta, base)
 				return
 			}
 			// ,@ and ,. are the splicing forms when they follow a comma
 			var inner strings.Builder
-			writeExpr(&inner, item, current, depth+form.delta)
+			writeExpr(&inner, item, current, depth+form.delta, base)
 			text := inner.String()
 			if strings.HasPrefix(text, "@") || strings.HasPrefix(text, ".") {
 				sb.WriteString(" ")
@@ -49,7 +63,7 @@ func writeExpr(sb *strings.Builder, e Expression, current *Package, depth int) {
 			return
 		}
 		sb.WriteString("(")
-		writeExpr(sb, v.car, current, depth)
+		writeExpr(sb, v.car, current, depth, base)
 		rest := v.cdr
 		for {
 			next, ok := rest.(*Cons)
@@ -57,12 +71,12 @@ func writeExpr(sb *strings.Builder, e Expression, current *Package, depth int) {
 				break
 			}
 			sb.WriteString(" ")
-			writeExpr(sb, next.car, current, depth)
+			writeExpr(sb, next.car, current, depth, base)
 			rest = next.cdr
 		}
 		if rest != Nil {
 			sb.WriteString(" . ")
-			writeExpr(sb, rest, current, depth)
+			writeExpr(sb, rest, current, depth, base)
 		}
 		sb.WriteString(")")
 	case *Vector:
@@ -71,9 +85,18 @@ func writeExpr(sb *strings.Builder, e Expression, current *Package, depth int) {
 			if i > 0 {
 				sb.WriteString(" ")
 			}
-			writeExpr(sb, item, current, depth)
+			writeExpr(sb, item, current, depth, base)
 		}
 		sb.WriteString(")")
+	case *Number:
+		switch {
+		case base != 10 && v.typ == NumberTypeInteger:
+			sb.WriteString(v.String() + ".")
+		case base != 10 && v.typ == NumberTypeRatio:
+			sb.WriteString("#10r" + v.String())
+		default:
+			sb.WriteString(v.String())
+		}
 	default:
 		sb.WriteString(e.String())
 	}
@@ -113,29 +136,29 @@ func prefixFormOf(c *Cons, depth int) (prefixForm, Expression, bool) {
 	return prefixForm{}, nil, false
 }
 
-func writeSymbol(sb *strings.Builder, sym *Symbol, current *Package) {
+func writeSymbol(sb *strings.Builder, sym *Symbol, current *Package, base int) {
 	switch {
 	case sym.pkg == nil:
 		sb.WriteString("#:")
-		sb.WriteString(escapeName(sym.name, nameAfterMarker))
+		sb.WriteString(escapeName(sym.name, nameAfterMarker, base))
 	case sym.pkg.name == NameKeyword:
 		sb.WriteString(":")
-		sb.WriteString(escapeName(sym.name, nameAfterMarker))
+		sb.WriteString(escapeName(sym.name, nameAfterMarker, base))
 	default:
 		if current != nil {
 			if found, _ := current.Find(sym.name); found == sym {
-				sb.WriteString(escapeName(sym.name, nameBare))
+				sb.WriteString(escapeName(sym.name, nameBare, base))
 				return
 			}
 		}
-		sb.WriteString(escapeName(sym.pkg.name, nameFirstPart))
+		sb.WriteString(escapeName(sym.pkg.name, nameFirstPart, base))
 		// The symbol is present in its home package, so Find looks no further
 		if _, status := sym.pkg.Find(sym.name); status == SymbolStatusExternal {
 			sb.WriteString(":")
 		} else {
 			sb.WriteString("::")
 		}
-		sb.WriteString(escapeName(sym.name, nameAfterMarker))
+		sb.WriteString(escapeName(sym.name, nameAfterMarker, base))
 	}
 }
 
@@ -157,8 +180,8 @@ const (
 // escapeName returns name as it must be written to read back as that name,
 // surrounded by | if it would otherwise read as something else. Characters that
 // the readtable treats as invalid, even inside |, are written after a \.
-func escapeName(name string, pos namePosition) string {
-	if !needsEscape(name, pos) {
+func escapeName(name string, pos namePosition, base int) string {
+	if !needsEscape(name, pos, base) {
 		return name
 	}
 	var sb strings.Builder
@@ -184,7 +207,7 @@ func isInvalid(r rune) bool {
 	return !unicode.IsPrint(r)
 }
 
-func needsEscape(name string, pos namePosition) bool {
+func needsEscape(name string, pos namePosition, base int) bool {
 	if name == "" {
 		return true
 	}
@@ -213,8 +236,8 @@ func needsEscape(name string, pos namePosition) bool {
 	if pos == nameFirstPart {
 		return false
 	}
-	// Plain tokens are read in radix 10, and an error still means it has number
-	// syntax
-	num, err := ParseNumber(name, 10, FloatFormatSingle)
+	// Plain tokens are read in the read base, and an error still means it has
+	// number syntax
+	num, err := ParseNumber(name, base, FloatFormatSingle)
 	return num != nil || err != nil
 }

@@ -27,6 +27,12 @@ type Reader struct {
 	// types.FloatFormatSingle or types.FloatFormatDouble: reading such a float
 	// with any other value is an error.
 	DefaultFloatFormat types.FloatFormat
+	// ReadBase is the radix of integers and ratios that are read from plain
+	// tokens, so in base 16 the token ff is a number. It is the equivalent of
+	// *read-base*, and must be from 2 to 36: reading a token with any other value
+	// is an error. Floats are always decimal, and so is an integer that ends in a
+	// decimal point. Use types.FormatBase to print for a reader with this base.
+	ReadBase int
 	// Features are the names of the keywords that #+ and #- test, such as "SBCL".
 	// They are compared exactly with the names the reader makes, so must already
 	// be in upper case. It is the equivalent of *features*.
@@ -48,6 +54,7 @@ func NewReader(ps *types.Packages) *Reader {
 		Packages:           ps,
 		Package:            ps.User(),
 		DefaultFloatFormat: types.FloatFormatSingle,
+		ReadBase:           10,
 		Features:           []string{"COMMON-LISP", "GLISPR"},
 	}
 }
@@ -101,7 +108,10 @@ func (r *Reader) finishToken(i *Input, tok *token) (readResult, error) {
 		return readResult{}, newReaderError(i, "token consists only of dots: %q", tok.String())
 	}
 	if !tok.hasEscape() {
-		tmpNum, err := readNumberToken(i, tok.String(), 10, func(val string, radix int) (*types.Number, error) {
+		if r.ReadBase < 2 || r.ReadBase > 36 {
+			return readResult{}, newReaderError(i, "invalid read base %d: it must be between 2 and 36", r.ReadBase)
+		}
+		tmpNum, err := readNumberToken(i, tok.String(), r.ReadBase, func(val string, radix int) (*types.Number, error) {
 			return types.ParseNumber(val, radix, r.DefaultFloatFormat)
 		})
 		if err != nil {

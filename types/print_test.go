@@ -1,6 +1,7 @@
 package types_test
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -266,4 +267,57 @@ func TestFormatBackquote(t *testing.T) {
 	// Without a current package every symbol is qualified, but the forms are not
 	assert.Equal(t, "`(COMMON-LISP-USER::A ,COMMON-LISP-USER::A)", types.Format(bq(list(a, uq(a))), nil))
 	assert.Equal(t, "`(COMMON-LISP-USER::A ,COMMON-LISP-USER::A)", bq(list(a, uq(a))).String())
+}
+
+func TestFormatBase(t *testing.T) {
+	ps := types.NewPackages()
+	sym := func(name string) types.Expression {
+		s, _ := ps.User().Intern(name)
+		return s
+	}
+	num := func(n int64) types.Expression { return types.NewNumberInteger(big.NewInt(n)) }
+
+	testDefs := []struct {
+		base int
+		expr types.Expression
+		want string
+	}{
+		// Symbols that read as numbers in the base need escapes
+		{10, sym("FF"), "FF"},
+		{16, sym("FF"), "|FF|"},
+		{10, sym("10"), "|10|"},
+		{16, sym("10"), "|10|"},
+		{2, sym("10"), "|10|"},
+		{2, sym("12"), "12"},
+		{16, sym("G"), "G"},
+		{17, sym("G"), "|G|"},
+		{36, sym("ZZ"), "|ZZ|"},
+		{16, sym("A/B"), "|A/B|"},
+		{10, sym("A/B"), "A/B"},
+		// A decimal point makes it decimal, so it is a number in any base
+		{16, sym("FF."), "FF."},
+		{16, sym("10."), "|10.|"},
+		// Floats are decimal in every base
+		{16, sym("1.5"), "|1.5|"},
+		{16, sym("1E5"), "|1E5|"},
+		// Numbers are written so that the base doesn't change them
+		{10, num(10), "10"},
+		{16, num(10), "10."},
+		{16, num(-255), "-255."},
+		{10, types.NewNumberRatio(big.NewRat(1, 2)), "1/2"},
+		{16, types.NewNumberRatio(big.NewRat(-1, 2)), "#10r-1/2"},
+		{16, types.NewNumberFloat(big.NewFloat(1.5), types.FloatFormatDouble), "1.5d0"},
+		{2, types.NewList([]types.Expression{num(3), sym("A"), sym("11")}), "(3. A |11|)"},
+		{16, types.NewVector([]types.Expression{num(3), sym("FF")}), "#(3. |FF|)"},
+	}
+	for _, tc := range testDefs {
+		assert.Equal(t, tc.want, types.FormatBase(tc.expr, ps.User(), tc.base), "base %d", tc.base)
+	}
+
+	// Format is base 10
+	assert.Equal(t, types.FormatBase(num(10), nil, 10), types.Format(num(10), nil))
+
+	for _, base := range []int{-1, 0, 1, 37} {
+		assert.Panics(t, func() { types.FormatBase(num(1), nil, base) }, "base %d", base)
+	}
 }
